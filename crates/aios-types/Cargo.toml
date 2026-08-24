@@ -1,0 +1,10 @@
+[package]
+name = "aios-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+time = { version = "0.3.55", features = ["serde-well-known", "formatting", "parsing"] }
+utoipa = { version = "5.5.0", features = ["time"] }

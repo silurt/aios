@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/aios-types", "crates/aios-core", "crates/aios-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "MIT"
+repository = "https://github.com/silurt/aios"
+
+[workspace.dependencies]
+aios-types = { path = "crates/aios-types" }
+aios-core = { path = "crates/aios-core" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true

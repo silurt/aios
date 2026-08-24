@@ -1,0 +1,209 @@
+//! `aios project …`
+
+use crate::render::{bold, dim, green, tilde};
+use anyhow::{Context, Result};
+use clap::Subcommand;
+
+#[derive(Subcommand)]
+pub enum ProjectCommand {
+    /// Register a project directory
+    Add {
+        /// Path to the project. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: String,
+        /// Override the slug derived from the directory name
+        #[arg(long)]
+        slug: Option<String>,
+        /// Override the display name
+        #[arg(long)]
+        name: Option<String>,
+        /// Tag the project. Repeatable.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
+        /// Show what would be registered without writing to the registry
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// List registered projects
+    #[command(visible_alias = "ls")]
+    List {
+        /// Only projects carrying this tag
+        #[arg(long)]
+        tag: Option<String>,
+    },
+    /// Show one project in full
+    Show {
+        /// Slug, id, or path. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        project: String,
+    },
+    /// Re-run detection over a registered project
+    Refresh {
+        #[arg(default_value = ".")]
+        project: String,
+    },
+    /// Remove a project from the registry (does not touch the directory)
+    #[command(visible_alias = "rm")]
+    Remove { project: String },
+}
+
+pub fn run(cmd: ProjectCommand, json: bool) -> Result<()> {
+    match cmd {
+        ProjectCommand::Add {
+            path,
+            slug,
+            name,
+            tags,
+            dry_run,
+        } => add(path, slug, name, tags, dry_run, json),
+        ProjectCommand::List { tag } => list(tag.as_deref(), json),
+        ProjectCommand::Show { project } => show(&project, json),
+        ProjectCommand::Refresh { project } => refresh(&project, json),
+        ProjectCommand::Remove { project } => remove(&project, json),
+    }
+}
+
+fn add(
+    path: String,
+    slug: Option<String>,
+    name: Option<String>,
+    tags: Vec<String>,
+    dry_run: bool,
+    json: bool,
+) -> Result<()> {
+    if dry_run {
+        let canonical =
+            std::fs::canonicalize(&path).with_context(|| format!("{path} is not a directory"))?;
+        let detection = aios_core::detect::detect(&canonical);
+        if json {
+            println!("{}", serde_json::to_string_pretty(&detection)?);
+        } else {
+            println!(
+                "{} {}",
+                bold("would register"),
+                tilde(&canonical.display().to_string())
+            );
+            print_detection(&detection);
+        }
+        return Ok(());
+    }
+
+    let registry = aios_core::Registry::open()?;
+    let project = registry.add(aios_types::NewProject {
+        path,
+        slug,
+        name,
+        tags,
+    })?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&project)?);
+    } else {
+        println!(
+            "{} {} {}",
+            green("registered"),
+            bold(&project.slug),
+            dim(&tilde(&project.path))
+        );
+    }
+    Ok(())
+}
+
+fn list(tag: Option<&str>, json: bool) -> Result<()> {
+    let registry = aios_core::Registry::open()?;
+    let projects = registry.list(tag)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&projects)?);
+        return Ok(());
+    }
+    if projects.is_empty() {
+        println!(
+            "{}",
+            dim("no projects registered — try `aios project add <path>`")
+        );
+        return Ok(());
+    }
+    let width = projects.iter().map(|p| p.slug.len()).max().unwrap_or(0);
+    for p in &projects {
+        let meta = if p.languages.is_empty() {
+            String::new()
+        } else {
+            format!(" [{}]", p.languages.join(", "))
+        };
+        println!(
+            "{}  {}{}",
+            bold(&format!("{:<width$}", p.slug, width = width)),
+            dim(&tilde(&p.path)),
+            dim(&meta),
+        );
+    }
+    Ok(())
+}
+
+fn show(needle: &str, json: bool) -> Result<()> {
+    let registry = aios_core::Registry::open()?;
+    let p = registry.resolve(needle)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&p)?);
+        return Ok(());
+    }
+    // Pad before colouring: ANSI escapes have no width on screen but do in a
+    // format specifier, so `{:<16}` over a coloured string mis-aligns.
+    let field = |k: &str, v: &str| println!("{} {v}", dim(&format!("{k:<13}")));
+    println!("{}", bold(&p.slug));
+    field("name", &p.name);
+    field("id", p.id.as_str());
+    field("path", &tilde(&p.path));
+    field("remote", p.git_remote.as_deref().unwrap_or("—"));
+    field("branch", p.default_branch.as_deref().unwrap_or("—"));
+    field("languages", &join_or_dash(&p.languages));
+    field("package mgr", p.package_manager.as_deref().unwrap_or("—"));
+    field("issue prefix", p.issue_prefix.as_deref().unwrap_or("—"));
+    field("tags", &join_or_dash(&p.tags));
+    Ok(())
+}
+
+fn refresh(needle: &str, json: bool) -> Result<()> {
+    let registry = aios_core::Registry::open()?;
+    let p = registry.refresh(needle)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&p)?);
+    } else {
+        println!("{} {}", green("refreshed"), bold(&p.slug));
+    }
+    Ok(())
+}
+
+fn remove(needle: &str, json: bool) -> Result<()> {
+    let registry = aios_core::Registry::open()?;
+    let p = registry.remove(needle)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&p)?);
+    } else {
+        println!(
+            "{} {} {}",
+            green("removed"),
+            bold(&p.slug),
+            dim("(directory untouched)")
+        );
+    }
+    Ok(())
+}
+
+fn print_detection(d: &aios_types::ProjectDetection) {
+    let field = |k: &str, v: &str| println!("{} {v}", dim(&format!("{k:<13}")));
+    field("remote", d.git_remote.as_deref().unwrap_or("—"));
+    field("branch", d.default_branch.as_deref().unwrap_or("—"));
+    field("languages", &join_or_dash(&d.languages));
+    field("package mgr", d.package_manager.as_deref().unwrap_or("—"));
+    field("issue prefix", d.issue_prefix.as_deref().unwrap_or("—"));
+}
+
+/// Render a list as comma-separated, or an em dash when empty, so every field in
+/// `show` occupies a line whether or not it has a value.
+fn join_or_dash(items: &[String]) -> String {
+    if items.is_empty() {
+        "—".to_string()
+    } else {
+        items.join(", ")
+    }
+}

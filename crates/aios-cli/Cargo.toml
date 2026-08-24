@@ -1,0 +1,17 @@
+[package]
+name = "aios-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aios"
+path = "src/main.rs"
+
+[dependencies]
+aios-types.workspace = true
+aios-core.workspace = true
+clap = { version = "4.6.6", features = ["derive"] }
+anyhow = "1.0.104"
+serde_json = "1.0.151"
+time = "0.3.55"
