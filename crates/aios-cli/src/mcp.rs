@@ -52,26 +52,48 @@ This project is registered with AIOS, which serves its tools over MCP as
 Every tool takes an optional `project` argument (slug, id, or path) and defaults
 to the working directory, so it is normally omitted."#;
 
-/// Resolve the aios binary to spawn.
+/// The command to put in the generated config.
 ///
-/// The current executable, not a bare `aios` on PATH: a harness may run with a
-/// different PATH than the shell that installed this, and silently binding to a
-/// different build is worse than an absolute path that has to be reinstalled
-/// after `cargo install`.
-fn binary_path() -> Result<PathBuf> {
-    std::env::current_exe().context("could not determine the running aios binary")
+/// `.mcp.json` is meant to be committed and shared, so an absolute path to
+/// someone's `target/debug/aios` is the wrong thing to write. Prefer the bare
+/// name when `aios` on PATH resolves to the very binary now running — that is
+/// portable and correct simultaneously.
+///
+/// Fall back to the absolute path otherwise: a harness may run with a different
+/// PATH than the shell that installed this, and silently binding to a
+/// different build is worse than a path that must be refreshed after
+/// `cargo install`.
+fn install_command() -> Result<String> {
+    let current = std::env::current_exe()
+        .context("could not determine the running aios binary")?
+        .canonicalize()
+        .context("could not canonicalize the running aios binary")?;
+
+    if let Some(on_path) = which_on_path("aios")
+        && on_path.canonicalize().is_ok_and(|p| p == current)
+    {
+        return Ok("aios".to_string());
+    }
+    Ok(current.display().to_string())
+}
+
+fn which_on_path(bin: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(bin))
+        .find(|candidate| candidate.is_file())
 }
 
 fn install(project: &str, dry_run: bool) -> Result<()> {
     let registry = aios_core::Registry::open()?;
     let project = registry.resolve(project)?;
     let root = PathBuf::from(&project.path);
-    let binary = binary_path()?;
+    let command = install_command()?;
 
     let mcp_json = serde_json::json!({
         "mcpServers": {
             "aios": {
-                "command": binary.display().to_string(),
+                "command": command,
                 "args": ["mcp", "serve"],
             }
         }

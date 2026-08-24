@@ -205,3 +205,33 @@ git.
 
 CLI commands call `Capabilities::call(...)` by name rather than the ports, so the
 CLI exercises the same path MCP and REST will take.
+
+## MCP
+
+`aios mcp serve` exposes every capability as an `aios_*` tool. The server
+defines no tools of its own -- it enumerates the capability registry -- so
+adding a capability adds a tool for Claude and Codex simultaneously.
+
+- `aios mcp install [project]` writes `.mcp.json` and a fenced managed region
+  into CLAUDE.md / AGENTS.md. It merges rather than overwrites, and rewrites
+  only what is between its markers.
+- Never `println!` in a code path reachable from `mcp serve`: stdout is the
+  protocol transport. Diagnostics go to stderr.
+- Capability handlers are blocking (they shell out). Anything calling them from
+  async must use `spawn_blocking`.
+
+<!-- BEGIN AIOS -->
+## AIOS
+
+This project is registered with AIOS, which serves its tools over MCP as
+`aios_*`. Prefer them over ad-hoc shell commands for these tasks:
+
+- **Issues** — `aios_issues_ready` (unblocked work), `aios_issues_list`,
+  `aios_issues_create`, `aios_issues_close`. Do not call `bd` directly.
+- **Knowledge** — `aios_kb_search` before assuming something is undocumented;
+  `aios_kb_capture` to record a decision worth keeping.
+- **Projects** — `aios_projects_list` to see the other registered repos.
+
+Every tool takes an optional `project` argument (slug, id, or path) and defaults
+to the working directory, so it is normally omitted.
+<!-- END AIOS -->

@@ -1,0 +1,1 @@
+{"id":"int-cd80c2eaae723695dec26b04b6f60b6f","kind":"field_change","created_at":"2026-08-24T09:45:39.742809Z","actor":"Marie Antoinette","issue_id":"aios-wiq","extra":{"field":"status","new_value":"closed","old_value":"open","reason":"MCP server ships in phase 2: 16 tools over stdio, plus aios mcp install for both harnesses"}}
