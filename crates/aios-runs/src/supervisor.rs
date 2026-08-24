@@ -85,11 +85,7 @@ impl Supervisor {
     /// `on_event` is called for every normalized event *after* it is durably
     /// logged, so a caller rendering live output can never show something that
     /// would be missing from a replay.
-    pub fn run(
-        &self,
-        start: StartRun,
-        mut on_event: impl FnMut(&Sequenced<RunEvent>),
-    ) -> Result<Run> {
+    pub fn run(&self, start: StartRun, on_event: impl FnMut(&Sequenced<RunEvent>)) -> Result<Run> {
         let spec = RunSpec {
             prompt: start.prompt.clone(),
             cwd: start.cwd.clone(),
@@ -102,7 +98,7 @@ impl Supervisor {
             disallowed_tools: Vec::new(),
         };
 
-        let mut run = Run {
+        let run = Run {
             id: RunId(ulid::Ulid::from_datetime(std::time::SystemTime::now()).to_string()),
             harness: start.harness.id(),
             project: start.project.clone(),
@@ -123,42 +119,89 @@ impl Supervisor {
         // visible, not a process nobody has a record of.
         self.store.put(COLLECTION, run.id.as_str(), &run)?;
 
-        let log = self.log(&run.id);
         let args = start.harness.command(&spec);
+        self.drive(run, start.harness.as_ref(), args, &start.cwd, on_event)
+    }
 
-        let mut child = Command::new(start.harness.binary())
+    /// Continue a parked run through the harness's own session.
+    ///
+    /// The same run, not a new one: the transcript stays one story, the event
+    /// cursor keeps working, and the approval that parked it still belongs to
+    /// this run. A resumed run appends to the existing log rather than starting
+    /// a second.
+    pub fn resume(
+        &self,
+        id: &str,
+        extra: Option<&str>,
+        on_event: impl FnMut(&Sequenced<RunEvent>),
+    ) -> Result<Run> {
+        let mut run = self.get(id)?;
+        if run.status == RunStatus::Running {
+            return Err(Error::Invalid(format!("{} is still running", run.id)));
+        }
+        let harness = harness_for(run.harness);
+        let session = run.session_ref.clone().ok_or_else(|| {
+            Error::Invalid(format!(
+                "{} never reported a session, so it cannot be continued — start a new run",
+                run.id
+            ))
+        })?;
+
+        let cwd = PathBuf::from(&run.cwd);
+        let spec = RunSpec {
+            // The original task, unless the caller is steering it somewhere new.
+            prompt: extra
+                .map(str::to_owned)
+                .unwrap_or_else(|| run.prompt.clone()),
+            cwd: cwd.clone(),
+            model: run.model.clone(),
+            allowed_tools: self.policy.always_allowed_tools(),
+            disallowed_tools: Vec::new(),
+        };
+        let args = harness.resume_command(&spec, &session).ok_or_else(|| {
+            Error::Invalid(format!("{} cannot resume sessions", harness.binary()))
+        })?;
+
+        run.status = RunStatus::Running;
+        run.error = None;
+        run.ended_at = None;
+        self.store.put(COLLECTION, run.id.as_str(), &run)?;
+
+        self.drive(run, harness.as_ref(), args, &cwd, on_event)
+    }
+
+    /// Spawn a harness and stream it into an existing run.
+    ///
+    /// Shared by `run` and `resume` so a resumed run is recorded exactly like a
+    /// fresh one — same log, same document, same event handling.
+    fn drive(
+        &self,
+        mut run: Run,
+        harness: &dyn Harness,
+        args: Vec<String>,
+        cwd: &std::path::Path,
+        mut on_event: impl FnMut(&Sequenced<RunEvent>),
+    ) -> Result<Run> {
+        let log = self.log(&run.id);
+
+        let mut child = Command::new(harness.binary())
             .args(&args)
-            .current_dir(&start.cwd)
+            .current_dir(cwd)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::NotFound => Error::ToolMissing {
-                    tool: start.harness.binary().to_string(),
+                    tool: harness.binary().to_string(),
                 },
                 _ => Error::Io(e),
             })?;
 
         let stdout = child.stdout.take().expect("stdout was piped");
-        let mut record = |event: RunEvent, run: &mut Run| -> Result<()> {
-            let at = OffsetDateTime::now_utc()
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default();
-            let seq = log.append(&event, &at)?;
-            run.last_seq = seq;
-            on_event(&Sequenced {
-                seq,
-                at,
-                v: aios_core::store::log::RECORD_VERSION,
-                data: event,
-            });
-            Ok(())
-        };
-
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
-            for event in start.harness.translate(&line) {
+            for event in harness.translate(&line) {
                 // Interesting fields are lifted onto the run document as they
                 // appear, so `run show` never has to replay a whole transcript
                 // to answer "which session? how much did it cost?".
@@ -184,7 +227,17 @@ impl Supervisor {
                     }
                     _ => {}
                 }
-                record(event, &mut run)?;
+                let at = OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default();
+                let seq = log.append(&event, &at)?;
+                run.last_seq = seq;
+                on_event(&Sequenced {
+                    seq,
+                    at,
+                    v: aios_core::store::log::RECORD_VERSION,
+                    data: event,
+                });
             }
         }
 
@@ -200,21 +253,34 @@ impl Supervisor {
 
         run.exit_code = status.code();
         run.ended_at = Some(OffsetDateTime::now_utc());
-        run.status = if status.success() {
+        // A run parked mid-stream stays parked, and that check comes *first*.
+        // A harness whose model gives up gracefully after a refused gate exits
+        // 0, so keying off the exit status would report a parked run as a clean
+        // success and hide the fact that it is one decision from continuing.
+        let parked = self
+            .get(run.id.as_str())
+            .is_ok_and(|r| r.status == RunStatus::Parked);
+        run.status = if parked {
+            RunStatus::Parked
+        } else if status.success() {
             RunStatus::Succeeded
         } else {
             RunStatus::Failed
         };
 
-        if !status.success() {
+        if !status.success() && run.status != RunStatus::Parked {
             let detail = stderr.trim();
             let error = if detail.is_empty() {
-                format!("{} exited with {}", start.harness.binary(), status)
+                format!("{} exited with {}", harness.binary(), status)
             } else {
                 detail.lines().rev().take(5).collect::<Vec<_>>().join(" | ")
             };
             run.error = Some(error.clone());
-            record(RunEvent::Failed { error }, &mut run)?;
+            let at = OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default();
+            let seq = log.append(&RunEvent::Failed { error }, &at)?;
+            run.last_seq = seq;
         }
 
         self.store.put(COLLECTION, run.id.as_str(), &run)?;

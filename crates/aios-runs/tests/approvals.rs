@@ -228,3 +228,73 @@ fn a_custom_policy_can_be_stricter_than_the_default() {
     assert_eq!(policy.decide("Read", "anything").verdict, Verdict::Deny);
     assert!(policy.always_allowed_tools().is_empty());
 }
+
+#[test]
+fn a_decision_is_remembered_for_the_same_request_in_the_same_run() {
+    // Without this, deciding an expired approval achieves nothing: the resumed
+    // run hits the same gate, a new approval is raised, and the answer is
+    // ignored.
+    let store = approvals("memo");
+    let policy = Policy {
+        timeout_secs: 0,
+        ..Policy::default()
+    };
+    let a = store
+        .raise(&policy, request("Edit", "src/main.rs"))
+        .unwrap();
+    store.expire_overdue().unwrap();
+    store.decide(a.id.as_str(), true, Some("later")).unwrap();
+
+    let found = store
+        .find_decided(&RunId("01TESTRUN".into()), "Edit", "src/main.rs")
+        .unwrap()
+        .expect("the decision should be found");
+    assert_eq!(found.state, ApprovalState::Approved);
+}
+
+#[test]
+fn a_decision_does_not_leak_to_another_run_or_another_action() {
+    // A decision is about *this* action in *this* run. Carrying it further
+    // would quietly widen permission beyond what anyone agreed to.
+    let store = approvals("memoscope");
+    let a = store
+        .raise(&Policy::default(), request("Edit", "src/main.rs"))
+        .unwrap();
+    store.decide(a.id.as_str(), true, None).unwrap();
+
+    assert!(
+        store
+            .find_decided(&RunId("01OTHERRUN".into()), "Edit", "src/main.rs")
+            .unwrap()
+            .is_none(),
+        "leaked to another run"
+    );
+    assert!(
+        store
+            .find_decided(&RunId("01TESTRUN".into()), "Edit", "src/other.rs")
+            .unwrap()
+            .is_none(),
+        "leaked to another file"
+    );
+    assert!(
+        store
+            .find_decided(&RunId("01TESTRUN".into()), "Bash", "src/main.rs")
+            .unwrap()
+            .is_none(),
+        "leaked to another tool"
+    );
+}
+
+#[test]
+fn a_pending_decision_is_not_treated_as_made() {
+    let store = approvals("memopending");
+    store
+        .raise(&Policy::default(), request("Edit", "x"))
+        .unwrap();
+    assert!(
+        store
+            .find_decided(&RunId("01TESTRUN".into()), "Edit", "x")
+            .unwrap()
+            .is_none()
+    );
+}

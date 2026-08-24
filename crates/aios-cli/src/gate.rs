@@ -83,6 +83,18 @@ fn ask(input: &HookInput, summary: &str, policy: &aios_runs::Policy) -> Result<(
         })
         .cloned();
 
+    // Reuse a decision already made for this exact request in this run, so
+    // approving an expired gate and resuming actually works.
+    if let Some(run) = &run
+        && let Some(prior) = approvals.find_decided(&run.id, &input.tool_name, summary)?
+    {
+        let approved = prior.state == aios_types::ApprovalState::Approved;
+        return emit(
+            if approved { "allow" } else { "deny" },
+            &format!("already decided ({})", prior.id),
+        );
+    }
+
     let approval = approvals.raise(
         policy,
         aios_runs::Request {
@@ -107,26 +119,53 @@ fn ask(input: &HookInput, summary: &str, policy: &aios_runs::Policy) -> Result<(
     );
 
     loop {
-        match approvals.outcome(approval.id.as_str(), time::OffsetDateTime::now_utc())? {
-            Some(true) => return emit("allow", "approved"),
-            Some(false) => {
-                // Deadline passed with nobody answering: park the run so it can
-                // be resumed, rather than letting it read as a failure.
-                if let Some(run) = &run {
-                    let expired = approvals.get(approval.id.as_str())?.state
-                        == aios_types::ApprovalState::Expired;
-                    if expired {
-                        let _ = supervisor.park(
-                            run.id.as_str(),
-                            &format!("waiting on approval {}", approval.id),
-                        );
-                    }
-                }
-                return emit("deny", &format!("approval {} was not granted", approval.id));
+        let current = approvals.get(approval.id.as_str())?;
+        let lapsed = current.expires_at <= time::OffsetDateTime::now_utc();
+
+        match current.state {
+            aios_types::ApprovalState::Approved => return emit("allow", "approved"),
+            aios_types::ApprovalState::Denied => {
+                return emit("deny", &format!("approval {} was denied", current.id));
             }
-            None => std::thread::sleep(POLL),
+            aios_types::ApprovalState::Expired => {
+                return park_and_deny(&supervisor, &run, &current);
+            }
+            // Past its deadline but not yet marked: mark it here rather than
+            // waiting for something else to notice. Expiry is evaluated on
+            // read, and this is the read that matters.
+            aios_types::ApprovalState::Pending if lapsed => {
+                approvals.expire_overdue()?;
+                let expired = approvals.get(approval.id.as_str())?;
+                return park_and_deny(&supervisor, &run, &expired);
+            }
+            aios_types::ApprovalState::Pending => std::thread::sleep(POLL),
         }
     }
+}
+
+/// Nobody answered in time: park the run so it can be resumed, and tell the
+/// harness no.
+///
+/// Denying is the only thing the harness understands, but the run must not read
+/// as a failure — the work is intact and one decision away from continuing.
+fn park_and_deny(
+    supervisor: &aios_runs::Supervisor,
+    run: &Option<aios_types::Run>,
+    approval: &aios_types::Approval,
+) -> Result<()> {
+    if let Some(run) = run {
+        let _ = supervisor.park(
+            run.id.as_str(),
+            &format!("waiting on approval {}", approval.id),
+        );
+    }
+    emit(
+        "deny",
+        &format!(
+            "approval {} expired; run parked — decide it and `aios run resume`",
+            approval.id
+        ),
+    )
 }
 
 fn rule_reason(verb: &str, rule: Option<&str>) -> String {

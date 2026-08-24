@@ -61,6 +61,30 @@ impl Approvals {
         Ok(approval)
     }
 
+    /// A decision already made for this exact request in this run.
+    ///
+    /// Without this, deciding an expired approval would achieve nothing: the
+    /// resumed run hits the same gate, a *new* approval is raised, and the
+    /// answer you gave is ignored. It also stops a run re-asking the same
+    /// question every time the model retries a tool.
+    ///
+    /// Scoped to one run and an exact tool+summary match, deliberately. A
+    /// decision is about *this* action in *this* run — carrying it across runs
+    /// would quietly widen permission far beyond what anyone agreed to.
+    pub fn find_decided(
+        &self,
+        run_id: &RunId,
+        tool: &str,
+        summary: &str,
+    ) -> Result<Option<Approval>> {
+        Ok(self.all()?.into_iter().find(|a| {
+            &a.run_id == run_id
+                && a.tool == tool
+                && a.summary == summary
+                && matches!(a.state, ApprovalState::Approved | ApprovalState::Denied)
+        }))
+    }
+
     pub fn get(&self, id: &str) -> Result<Approval> {
         self.store
             .get::<Approval>(COLLECTION, id)?

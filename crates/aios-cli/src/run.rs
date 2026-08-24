@@ -30,6 +30,15 @@ pub enum RunCommand {
     },
     /// Show one run
     Show { run: String },
+    /// Continue a parked run through its harness session
+    Resume {
+        run: String,
+        /// Steer it somewhere new instead of repeating the original task
+        #[arg(long, short)]
+        task: Option<String>,
+        #[arg(long)]
+        stream: bool,
+    },
     /// Replay a run's transcript
     Events {
         run: String,
@@ -50,6 +59,7 @@ pub fn run(cmd: RunCommand, json: bool) -> Result<()> {
         } => start(task, project, &harness, model, stream, json),
         RunCommand::List { limit } => list(limit, json),
         RunCommand::Show { run } => show(&run, json),
+        RunCommand::Resume { run, task, stream } => resume(&run, task.as_deref(), stream, json),
         RunCommand::Events { run, since } => events(&run, since, json),
     }
 }
@@ -160,6 +170,35 @@ fn print_event(event: &aios_types::RunEvent) {
         }
         E::Failed { error } => println!("{} {error}", red("error")),
     }
+}
+
+fn resume(needle: &str, task: Option<&str>, stream: bool, json: bool) -> Result<()> {
+    let supervisor = supervisor()?;
+    let existing = supervisor.get(needle)?;
+
+    if !json && !stream {
+        println!(
+            "{} {} {}",
+            dim("resuming"),
+            bold(existing.id.as_str()),
+            dim(&format!("from event {}", existing.last_seq))
+        );
+    }
+
+    let completed = supervisor.resume(existing.id.as_str(), task, |event| {
+        if stream {
+            if let Ok(line) = serde_json::to_string(event) {
+                println!("{line}");
+            }
+        } else if !json {
+            print_event(&event.data);
+        }
+    })?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&completed)?);
+    }
+    Ok(())
 }
 
 fn list(limit: usize, json: bool) -> Result<()> {
