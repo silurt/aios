@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "aios",
+  "project_id": "7aa25dad-77e8-4522-ae01-5480744e97df"
+}
