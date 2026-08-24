@@ -150,6 +150,7 @@ impl Supervisor {
             on_event(&Sequenced {
                 seq,
                 at,
+                v: aios_core::store::log::RECORD_VERSION,
                 data: event,
             });
             Ok(())
@@ -169,6 +170,11 @@ impl Supervisor {
                         if run.model.is_none() {
                             run.model = model.clone();
                         }
+                        // Persist immediately. The approval gate correlates a
+                        // permission request to its run by session id, and the
+                        // gate fires *during* the run — leaving this until the
+                        // run ends orphans every approval it raises.
+                        self.store.put(COLLECTION, run.id.as_str(), &run)?;
                     }
                     RunEvent::Finished {
                         cost_usd, turns, ..

@@ -110,6 +110,15 @@ fn install(project: &str, dry_run: bool) -> Result<()> {
         planned.push((mcp_path, text));
     }
 
+    // The PreToolUse hook is what routes permission questions into AIOS
+    // approvals (§7.1). Both harnesses use the same hook config shape.
+    for (dir, file) in [(".claude", "settings.json"), (".codex", "hooks.json")] {
+        let path = root.join(dir).join(file);
+        if let Some(text) = merge_hook(&path, &command)? {
+            planned.push((path, text));
+        }
+    }
+
     for name in ["CLAUDE.md", "AGENTS.md"] {
         let path = root.join(name);
         let existing = std::fs::read_to_string(&path).unwrap_or_default();
@@ -173,6 +182,64 @@ fn merge_mcp_json(path: &Path, ours: &serde_json::Value) -> Result<Option<String
         return Ok(None);
     }
     servers.insert("aios".into(), entry);
+    let rendered = serde_json::to_string_pretty(&root)?;
+    Ok(Some(format!("{rendered}\n")))
+}
+
+/// Add our PreToolUse hook without disturbing hooks anyone else installed.
+///
+/// beads puts its own hooks in these files, so replacing the block would break
+/// it. We match on our own command string and leave every other entry alone.
+fn merge_hook(path: &Path, command: &str) -> Result<Option<String>> {
+    let mut root: serde_json::Value = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
+            .with_context(|| format!("{} is not valid JSON", path.display()))?,
+        _ => serde_json::json!({}),
+    };
+
+    let ours = serde_json::json!({
+        "type": "command",
+        "command": format!("{command} approval gate"),
+    });
+
+    let hooks = root
+        .as_object_mut()
+        .context("hook config root must be an object")?
+        .entry("hooks")
+        .or_insert_with(|| serde_json::json!({}));
+    let events = hooks.as_object_mut().context("`hooks` must be an object")?;
+    let matchers = events
+        .entry("PreToolUse")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .context("`PreToolUse` must be an array")?;
+
+    // Already present with the same command: nothing to do.
+    let already = matchers.iter().any(|m| {
+        m["hooks"]
+            .as_array()
+            .is_some_and(|hs| hs.iter().any(|h| h["command"] == ours["command"]))
+    });
+    if already {
+        return Ok(None);
+    }
+
+    // Drop a stale entry of ours (the binary path may have moved) before
+    // adding the current one, so reinstalling does not accumulate hooks.
+    matchers.retain(|m| {
+        !m["hooks"].as_array().is_some_and(|hs| {
+            hs.iter().any(|h| {
+                h["command"]
+                    .as_str()
+                    .is_some_and(|c| c.ends_with("approval gate"))
+            })
+        })
+    });
+    matchers.push(serde_json::json!({ "matcher": "", "hooks": [ours] }));
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let rendered = serde_json::to_string_pretty(&root)?;
     Ok(Some(format!("{rendered}\n")))
 }

@@ -6,12 +6,15 @@
 //! do no work beyond argument handling and rendering.
 
 mod app;
+mod approval;
 mod cap;
+mod gate;
 mod issue;
 mod kb;
 mod mcp;
 mod project;
 mod render;
+mod run;
 mod vcs;
 
 use anyhow::Result;
@@ -61,6 +64,14 @@ enum Command {
     #[command(subcommand)]
     Mcp(mcp::McpCommand),
 
+    /// Start and inspect harness runs
+    #[command(subcommand, visible_alias = "r")]
+    Run(run::RunCommand),
+
+    /// Decide what agents are allowed to do
+    #[command(subcommand, visible_alias = "a")]
+    Approval(approval::ApprovalCommand),
+
     /// Check that the local installation is healthy
     Doctor,
 
@@ -92,6 +103,8 @@ fn run(command: Command, json: bool) -> Result<()> {
         Command::Vcs(cmd) => vcs::run(cmd, json),
         Command::Cap(cmd) => cap::run(cmd, json),
         Command::Mcp(cmd) => mcp::run(cmd),
+        Command::Run(cmd) => run::run(cmd, json),
+        Command::Approval(cmd) => approval::run(cmd, json),
         Command::Doctor => doctor(json),
         Command::Version => version(json),
     }

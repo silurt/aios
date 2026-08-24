@@ -345,3 +345,77 @@ fn list_with_ids_reports_the_filename_not_a_field() {
     assert_eq!(listed[0].0, "filed-as");
     assert_eq!(listed[0].1.name, "called");
 }
+
+#[test]
+fn records_carry_a_schema_version() {
+    let path = temp("version").join("events.jsonl");
+    AppendLog::new(&path)
+        .append(
+            &Thing {
+                name: "a".into(),
+                count: 1,
+            },
+            "t",
+        )
+        .unwrap();
+
+    let raw: serde_json::Value =
+        serde_json::from_str(std::fs::read_to_string(&path).unwrap().trim()).unwrap();
+    assert_eq!(raw["v"], aios_core::store::log::RECORD_VERSION);
+}
+
+#[test]
+fn records_from_another_version_are_skipped_not_silently_mangled() {
+    // Found the hard way: renaming a field does not make an old record fail to
+    // parse, it makes it parse with that field empty, because Option defaults
+    // to None. A visible gap in the sequence is the honest outcome.
+    let path = temp("wrongversion").join("events.jsonl");
+    let log = AppendLog::new(&path);
+    log.append(
+        &Thing {
+            name: "current".into(),
+            count: 1,
+        },
+        "t",
+    )
+    .unwrap();
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}\n",
+            std::fs::read_to_string(&path).unwrap(),
+            r#"{"seq":2,"at":"t","v":99,"data":{"name":"future","count":2}}"#
+        ),
+    )
+    .unwrap();
+
+    let records = log.read_since::<Thing>(0, 100).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].data.name, "current");
+
+    // But it is still reachable, so a transcript from another version can be
+    // exported or migrated rather than being unreadable.
+    let raw = log.read_raw_since(0, 100).unwrap();
+    assert_eq!(raw.len(), 2);
+    assert_eq!(raw[1]["data"]["name"], "future");
+}
+
+#[test]
+fn unversioned_records_are_treated_as_version_zero() {
+    // Assuming an unversioned record matches the current shape is exactly the
+    // mistake the field exists to prevent.
+    let path = temp("unversioned").join("events.jsonl");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "{\"seq\":1,\"at\":\"t\",\"data\":{\"name\":\"old\",\"count\":1}}\n",
+    )
+    .unwrap();
+
+    assert!(
+        AppendLog::new(&path)
+            .read_since::<Thing>(0, 10)
+            .unwrap()
+            .is_empty()
+    );
+}

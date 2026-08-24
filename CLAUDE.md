@@ -185,6 +185,29 @@ Rules:
 - Never delete a user's data to tidy up. Report it (see `aios doctor` and the
   legacy `state.db` note) and let them decide.
 
+## Runs and approvals
+
+`aios run start "<task>"` spawns a harness, normalizes its output into
+`RunEvent`, writes each event to `~/.aios/runs/<id>/events.jsonl`, and persists
+a `Run` document. `aios run events <id> --since N` replays from a cursor.
+
+Approvals (see `docs/plan.md` section 7.1):
+
+- Policy is ordered, first-match-wins, with an explicit default, in
+  `~/.aios/policy.json` (hand-editable). Unconditional allows become the
+  harness's tool allowlist, so those calls never become questions.
+- Anything else raises an `Approval` and blocks the harness at a **PreToolUse
+  hook** (`aios approval gate`) -- Claude Code has no --permission-prompt-tool,
+  so MCP cannot serve this role. `aios mcp install` writes the hook.
+- Expiry parks the run rather than killing it, and an expired approval can
+  still be decided afterwards. Never make an unanswered approval fatal.
+- Approvals settled by policy are still recorded. A decision that leaves no
+  trace cannot be audited.
+
+Rules: never print to stdout from a code path reachable by `approval gate` or
+`mcp serve` -- both are protocol channels. Never treat `RunStatus::Parked` as
+terminal.
+
 <!-- BEGIN AIOS -->
 ## AIOS
 

@@ -111,7 +111,15 @@ pub struct Run {
 /// maps onto this, so no consumer — CLI, UI, channel — ever branches on which
 /// harness produced it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema, JsonSchema)]
-#[serde(tag = "type", rename_all = "camelCase")]
+// `rename_all` renames the *variants*; fields inside them need
+// `rename_all_fields`. Without it `sessionRef` ships as `session_ref` and the
+// wire format is camelCase in the tag and snake_case in the payload.
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+#[schemars(rename_all = "camelCase")]
 pub enum RunEvent {
     /// The harness came up and reported its session.
     Started {

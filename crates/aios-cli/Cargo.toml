@@ -21,3 +21,7 @@ aios-obsidian.workspace = true
 aios-git.workspace = true
 aios-mcp.workspace = true
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+aios-runs.workspace = true
+aios-claude.workspace = true
+aios-codex.workspace = true
+serde = { version = "1.0.229", features = ["derive"] }

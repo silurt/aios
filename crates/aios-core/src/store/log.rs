@@ -18,6 +18,23 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
+/// The record shape this build writes.
+///
+/// Bumped when the payload shape changes incompatibly. Documents get this via
+/// their envelope (§16); logs need it too, and for a sharper reason: a typed
+/// payload whose field was renamed does not fail to parse, it parses with that
+/// field missing. `Option` fields default to `None`, so a rename silently
+/// rewrites history instead of erroring. Found exactly that way, by renaming
+/// `session_ref` to `sessionRef` and watching a real transcript lose its
+/// session id.
+pub const RECORD_VERSION: u32 = 1;
+
+fn default_version() -> u32 {
+    // Records written before versioning are version 0, not the current one --
+    // assuming they match is the mistake this field exists to prevent.
+    0
+}
+
 /// A record and its position in the stream.
 #[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -26,6 +43,9 @@ pub struct Sequenced<T> {
     /// sends back as `?since=`.
     pub seq: u64,
     pub at: String,
+    /// Record schema version.
+    #[serde(default = "default_version")]
+    pub v: u32,
     pub data: T,
 }
 
@@ -55,6 +75,7 @@ impl AppendLog {
         let record = Sequenced {
             seq,
             at: at.to_string(),
+            v: RECORD_VERSION,
             data,
         };
         let mut line = serde_json::to_string(&record)?;
@@ -92,6 +113,11 @@ impl AppendLog {
     /// fatal: the only way one occurs is a torn trailing write, and refusing to
     /// serve the entire history because the last record was cut short would
     /// turn a recoverable crash into an unusable log.
+    ///
+    /// Records from a different [`RECORD_VERSION`] are skipped too. That leaves
+    /// a visible gap in the sequence numbers, which is the honest outcome — far
+    /// better than handing back a record whose renamed fields silently came
+    /// through empty. Use [`AppendLog::read_raw_since`] to see them anyway.
     pub fn read_since<T: DeserializeOwned>(
         &self,
         since: u64,
@@ -107,6 +133,7 @@ impl AppendLog {
                 continue;
             }
             match serde_json::from_str::<Sequenced<T>>(&line) {
+                Ok(record) if record.v != RECORD_VERSION => continue,
                 Ok(record) if record.seq > since => {
                     out.push(record);
                     if out.len() >= limit {
@@ -136,4 +163,32 @@ fn peek_seq(line: &str) -> Option<u64> {
         .ok()?
         .get("seq")?
         .as_u64()
+}
+
+impl AppendLog {
+    /// Records with `seq > since` as untyped JSON, including ones this build
+    /// cannot interpret.
+    ///
+    /// The escape hatch for a transcript written by a different version: it can
+    /// still be read, exported, or migrated, rather than being unreachable
+    /// because the typed reader skips it.
+    pub fn read_raw_since(&self, since: u64, limit: usize) -> Result<Vec<serde_json::Value>> {
+        let Some(reader) = self.reader()? else {
+            return Ok(Vec::new());
+        };
+        let mut out = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if value.get("seq").and_then(|s| s.as_u64()).unwrap_or(0) > since {
+                out.push(value);
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
 }
