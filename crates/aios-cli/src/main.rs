@@ -9,6 +9,7 @@ mod app;
 mod cap;
 mod issue;
 mod kb;
+mod mcp;
 mod project;
 mod render;
 mod vcs;
@@ -56,6 +57,10 @@ enum Command {
     #[command(subcommand)]
     Cap(cap::CapCommand),
 
+    /// Serve capabilities to coding harnesses over MCP
+    #[command(subcommand)]
+    Mcp(mcp::McpCommand),
+
     /// Check that the local installation is healthy
     Doctor,
 
@@ -86,6 +91,7 @@ fn run(command: Command, json: bool) -> Result<()> {
         Command::Kb(cmd) => kb::run(cmd, json),
         Command::Vcs(cmd) => vcs::run(cmd, json),
         Command::Cap(cmd) => cap::run(cmd, json),
+        Command::Mcp(cmd) => mcp::run(cmd),
         Command::Doctor => doctor(json),
         Command::Version => version(json),
     }

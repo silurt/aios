@@ -7,6 +7,7 @@ members = [
     "crates/aios-beads",
     "crates/aios-obsidian",
     "crates/aios-git",
+    "crates/aios-mcp",
     "crates/aios-cli",
 ]
 
@@ -24,6 +25,7 @@ aios-caps = { path = "crates/aios-caps" }
 aios-beads = { path = "crates/aios-beads" }
 aios-obsidian = { path = "crates/aios-obsidian" }
 aios-git = { path = "crates/aios-git" }
+aios-mcp = { path = "crates/aios-mcp" }
 
 [profile.release]
 opt-level = 3

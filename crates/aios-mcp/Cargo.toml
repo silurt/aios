@@ -1,0 +1,13 @@
+[package]
+name = "aios-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+aios-types.workspace = true
+aios-core.workspace = true
+aios-caps.workspace = true
+rmcp = { version = "3.1.4", features = ["server", "transport-io"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-std"] }
+serde_json = "1.0.151"

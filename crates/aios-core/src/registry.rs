@@ -4,21 +4,42 @@ use crate::detect;
 use crate::error::{Error, Result};
 use aios_types::{NewProject, Project, ProjectId, ProjectSummary};
 use rusqlite::{Connection, OptionalExtension, Row, params};
+use std::sync::Mutex;
 use time::OffsetDateTime;
 
+/// The project registry.
+///
+/// The connection sits behind a `Mutex` because `rusqlite::Connection` is
+/// `Send` but not `Sync`, and every server surface — MCP now, the daemon in
+/// phase 4 — needs a `Sync` handle it can share across tasks. Serializing
+/// registry access costs nothing here: these are microsecond-scale local
+/// queries, and the operations around them shell out to `bd` and `git`, which
+/// dominate by orders of magnitude.
 pub struct Registry {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Registry {
     pub fn open() -> Result<Self> {
         Ok(Self {
-            conn: crate::db::open()?,
+            conn: Mutex::new(crate::db::open()?),
         })
     }
 
     pub fn from_conn(conn: Connection) -> Self {
-        Self { conn }
+        Self {
+            conn: Mutex::new(conn),
+        }
+    }
+
+    /// Borrow the connection.
+    ///
+    /// Panics only if a previous holder panicked mid-query, which would mean
+    /// the database is in an unknown state — continuing would be worse.
+    fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn
+            .lock()
+            .expect("registry mutex poisoned by an earlier panic")
     }
 
     /// Register a directory.
@@ -89,7 +110,7 @@ impl Registry {
             updated_at: now,
         };
 
-        self.conn.execute(
+        self.conn().execute(
             "INSERT INTO projects (id, slug, name, path, git_remote, default_branch,
                  languages, package_manager, issue_prefix, created_at, updated_at)
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
@@ -108,7 +129,7 @@ impl Registry {
             ],
         )?;
         for tag in &project.tags {
-            self.conn.execute(
+            self.conn().execute(
                 "INSERT INTO project_tags (project_id, tag) VALUES (?1, ?2)",
                 params![project.id.as_str(), tag],
             )?;
@@ -117,29 +138,36 @@ impl Registry {
     }
 
     /// List projects, optionally filtered to those carrying `tag`.
+    ///
+    /// Rows are collected and the lock released *before* tags are fetched.
+    /// `with_tags` takes the lock itself, and `std::sync::Mutex` is not
+    /// reentrant — holding the guard across that call would deadlock the
+    /// process rather than fail.
     pub fn list(&self, tag: Option<&str>) -> Result<Vec<ProjectSummary>> {
-        let mut out = Vec::new();
-        match tag {
-            Some(tag) => {
-                let mut stmt = self.conn.prepare(
-                    "SELECT p.* FROM projects p
-                     JOIN project_tags t ON t.project_id = p.id
-                     WHERE t.tag = ?1 ORDER BY p.slug",
-                )?;
-                let rows = stmt.query_map(params![tag], row_to_project)?;
-                for r in rows {
-                    out.push(self.with_tags(r?)?.into());
+        let projects = {
+            let conn = self.conn();
+            match tag {
+                Some(tag) => {
+                    let mut stmt = conn.prepare(
+                        "SELECT p.* FROM projects p
+                         JOIN project_tags t ON t.project_id = p.id
+                         WHERE t.tag = ?1 ORDER BY p.slug",
+                    )?;
+                    let rows = stmt.query_map(params![tag], row_to_project)?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()?
+                }
+                None => {
+                    let mut stmt = conn.prepare("SELECT * FROM projects ORDER BY slug")?;
+                    let rows = stmt.query_map([], row_to_project)?;
+                    rows.collect::<rusqlite::Result<Vec<_>>>()?
                 }
             }
-            None => {
-                let mut stmt = self.conn.prepare("SELECT * FROM projects ORDER BY slug")?;
-                let rows = stmt.query_map([], row_to_project)?;
-                for r in rows {
-                    out.push(self.with_tags(r?)?.into());
-                }
-            }
-        }
-        Ok(out)
+        };
+
+        projects
+            .into_iter()
+            .map(|p| self.with_tags(p).map(ProjectSummary::from))
+            .collect()
     }
 
     /// Resolve by slug, then by id, then by path — so `aios project show .`
@@ -161,7 +189,7 @@ impl Registry {
 
     pub fn remove(&self, needle: &str) -> Result<Project> {
         let project = self.resolve(needle)?;
-        self.conn.execute(
+        self.conn().execute(
             "DELETE FROM projects WHERE id = ?1",
             params![project.id.as_str()],
         )?;
@@ -180,7 +208,7 @@ impl Registry {
         project.package_manager = d.package_manager;
         project.issue_prefix = d.issue_prefix;
         project.updated_at = OffsetDateTime::now_utc();
-        self.conn.execute(
+        self.conn().execute(
             "UPDATE projects SET git_remote=?2, default_branch=?3, languages=?4,
                  package_manager=?5, issue_prefix=?6, updated_at=?7 WHERE id=?1",
             params![
@@ -198,14 +226,14 @@ impl Registry {
 
     pub fn count(&self) -> Result<i64> {
         Ok(self
-            .conn
+            .conn()
             .query_row("SELECT COUNT(*) FROM projects", [], |r| r.get(0))?)
     }
 
     fn find_by(&self, column: &str, value: &str) -> Result<Option<Project>> {
         let sql = format!("SELECT * FROM projects WHERE {column} = ?1");
         let found = self
-            .conn
+            .conn()
             .query_row(&sql, params![value], row_to_project)
             .optional()?;
         found.map(|p| self.with_tags(p)).transpose()
@@ -224,9 +252,9 @@ impl Registry {
     }
 
     fn with_tags(&self, mut project: Project) -> Result<Project> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT tag FROM project_tags WHERE project_id = ?1 ORDER BY tag")?;
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT tag FROM project_tags WHERE project_id = ?1 ORDER BY tag")?;
         project.tags = stmt
             .query_map(params![project.id.as_str()], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
