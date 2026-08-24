@@ -125,3 +125,44 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Architecture
+
+**Read `docs/plan.md` before making structural decisions.** It carries the locked
+decisions (§0) and the reasoning behind them. Do not re-litigate a numbered
+decision without saying so explicitly.
+
+AIOS is a Rust daemon that runs coding harnesses (Claude Code, Codex) against a
+registry of projects, unifying issue tracking (beads), knowledge (Obsidian vault),
+and VCS behind one capability layer projected onto REST, MCP, CLI, and a generated
+OpenAPI spec.
+
+This is a **polyglot monorepo**: `crates/` (Rust core + the `aios` binary),
+`clients/apple/` (SwiftUI macOS + iOS over a shared `AIOSKit` package),
+`clients/ts/` (generated TypeScript client).
+
+## Work order — the tier rule
+
+Priority is always, and per feature:
+
+```
+Tier 0  the aios binary       ->  Tier 1  local desktop client  ->  Tier 2  mobile client
+        core + CLI + API + MCP        (macOS now)                       (iOS now)
+```
+
+- A capability lands in the binary first, usable from the CLI and exposed over REST
+  and MCP. Only then does the desktop client render it, and only then does mobile
+  take the subset that makes sense away from a desk. Never the reverse.
+- **The test:** can you do it with `aios` in a terminal? If not, the core is not
+  done and no client work should start.
+- **Clients contain presentation only.** No domain logic in view models. If a client
+  needs to know a rule, the API is missing an endpoint.
+- macOS and iOS are the current *implementations* of two client roles, not the roles
+  themselves. Nothing in the core may assume Apple.
+
+## Conventions
+
+- Nothing but `aios daemon *` subcommands may touch `aios-core` directly; every
+  other surface is an API client.
+- The `IssueTracker` port goes through the `bd` CLI. Never read `.beads/` directly.
+- `openapi.json` is generated and committed; it is the contract for all clients.

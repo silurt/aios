@@ -20,7 +20,7 @@
 | 7 | Push | **None** | No custody of push tokens or an APNs key until the app warrants securing them. Removes the last third party from the data path; forces approvals to be policy-driven rather than interrupt-driven, which is better anyway. §13.3 |
 | 8 | Process model | **One binary, three modes** — `aios serve` (daemon), `aios <cmd>` (CLI client), managed LaunchAgent | Same executable however it is started; the Mac app installs and supervises it, but never owns it. §3.1 |
 | 10 | Repo shape | **One polyglot monorepo** — Rust crates, Apple apps, TS client, docs, issues | The OpenAPI spec is a seam *inside* the repo, so a capability change and every client that consumes it land in one commit. Split repos would make each schema change a multi-repo dance with version pinning. §11.1 |
-| 9 | Admin UI | **Native macOS SwiftUI app**, sharing a Swift package with the iOS app. Next.js web UI dropped. | Two SwiftUI targets over one shared `AIOSKit` costs far less than maintaining a React admin *and* a SwiftUI admin. §14 |
+| 9 | Client tiers | **Binary → desktop → mobile**, always and per feature. macOS/iOS are the first implementations of the two client roles. Next.js web UI dropped. | Clients hold presentation only; the CLI being complete is what keeps them honest. Two SwiftUI targets over one shared `AIOSKit` also costs far less than a React admin *and* a SwiftUI admin. §1.1, §14 |
 
 
 ---
@@ -34,6 +34,54 @@ are*, (b) *a single canonical implementation of the tools those projects share*
 spawning, streaming, persisting, resuming. Harnesses become interchangeable
 execution backends. Channels become interchangeable front ends. What stays fixed
 in the middle is the registry, the capabilities, and the run supervisor.
+
+### 1.1 Work order — the tier rule
+
+**Standing priority, not just an initial build order:**
+
+```
+Tier 0   the aios binary          core + CLI + API + MCP
+   ↓
+Tier 1   local desktop client     macOS SwiftUI now; the role is "full admin,
+                                  same machine, over the Unix socket"
+   ↓
+Tier 2   mobile client            iOS now; the role is "on-the-go triage and
+                                  conversation, over the network"
+```
+
+macOS and iOS are the *current implementations* of two roles, not the roles
+themselves. A Linux or Windows desktop client is a Tier 1 client; an Android app is
+a Tier 2 client. Nothing in the core may assume Apple.
+
+**The rule applies per feature, not just to the initial build.** Every capability
+lands in the binary first — usable from the CLI, exposed over REST and MCP — then
+the desktop client renders it, then mobile takes whatever subset makes sense away
+from a desk. Never the other way round. When channels arrive they follow the same
+path; so does everything after them.
+
+**The test is concrete:** *can you do it with `aios` in a terminal?* If not, the
+core is not done and no client work should start. This is checkable rather than
+aspirational, which is the point.
+
+**What this guards against.** The usual way a system like this rots is that the
+desktop app quietly accumulates domain logic in its view models — approval rules,
+run-state derivation, project resolution — which mobile then cannot reuse, the CLI
+never had, and the API cannot express. So:
+
+> **Clients contain presentation only.** `AIOSKit` may hold client-side *state
+> management* — caching, the outbox, stream resumption. It may not hold domain
+> logic. If a client needs to know a rule, the API is missing an endpoint.
+
+That is the same constraint as the API-only rule in §3.1, stated as a work-order
+principle: the CLI being a complete interface is what keeps every other client
+honest.
+
+**Contracts, so a future client is not a redesign:**
+
+| Tier | Must do | Must not do |
+| ---- | ------- | ----------- |
+| 1 — desktop | Connect over UDS; manage daemon lifecycle; full admin surface; run inspection with diffs; approval triage; KB browse; persistent tray/menu-bar presence | Hold domain logic; be required by the core |
+| 2 — mobile | Network transport with pairing; triage-first UI; conversation; resumable streams; offline outbox | Manage daemon lifecycle; assume it is the only client |
 
 ## 2. The one design decision everything else hangs off
 
@@ -435,13 +483,14 @@ aios/
     aios-obsidian/     # Knowledge impl
     aios-git/          # VCS impl
     aios-channels/     # deferred
-  apple/
-    AIOSKit/           # shared SwiftPM package: generated client, models,
+  clients/             # every client lives here, one dir per platform
+    apple/
+      AIOSKit/         # shared SwiftPM package: generated client, models,
                        #   @Observable stores, SSE handling, keychain, outbox
-    AIOS-macOS/        # SwiftUI admin app + menu bar extra
-    AIOS-iOS/          # SwiftUI triage app
-  clients/
+      AIOS-macOS/      # tier 1 — SwiftUI admin app + menu bar extra
+      AIOS-iOS/        # tier 2 — SwiftUI triage app
     ts/                # generated TypeScript client for your own apps
+                       #   (and the seed of any future web or Linux client)
   openapi.json         # generated, committed, the contract between the two worlds
   docs/
 ```
@@ -475,7 +524,7 @@ where the clients are wrong — which is precisely the drift §13.6 exists to pr
 | Area | Build system | Root artifact |
 | ---- | ------------ | ------------- |
 | `crates/**` | Cargo workspace (`[workspace] members = ["crates/*"]`) | `aios` binary |
-| `apple/**` | Xcode workspace + SwiftPM (`AIOSKit` as a local package) | `AIOS.app`, `AIOS-iOS.app` |
+| `clients/apple/**` | Xcode workspace + SwiftPM (`AIOSKit` as a local package) | `AIOS.app`, `AIOS-iOS.app` |
 | `clients/ts/**` | npm | generated TS client |
 
 A root **`justfile`** is the single entry point — `just build`, `just check`,
@@ -495,7 +544,7 @@ and spec version are the same number by construction. This makes the version-ske
 handling in §14.3 nearly free — mismatch means someone is running a stale build, not
 that two independently-versioned components disagree.
 
-**CI is path-filtered:** Rust jobs on `crates/**`, Swift jobs on `apple/**` (macOS
+**CI is path-filtered:** Rust jobs on `crates/**`, Swift jobs on `clients/apple/**` (macOS
 runner, the expensive one), and a spec-staleness check that always runs because it
 is the seam that matters.
 
@@ -516,7 +565,7 @@ blocked on approvals API"), and beads' dependency graph only works within a DB.
 - No telemetry, analytics, or crash reporting.
 - No replacing Obsidian or beads UIs — AIOS writes what they already read.
 
-## 13. Remote control — the iOS app
+## 13. Tier 2: the mobile client (iOS first)
 
 ### The framing that keeps this cheap
 
@@ -806,11 +855,11 @@ None of this changes phases 0–2.
 
 ---
 
-## 14. The macOS admin app
+## 14. Tier 1: the local desktop client (macOS first)
 
 ### 14.1 What it is
 
-A native SwiftUI Mac app, `apple/AIOS-macOS/`, that is the primary visual admin
+A native SwiftUI Mac app, `clients/apple/AIOS-macOS/`, that is the primary visual admin
 surface — and the reason there is no Next.js UI in this plan. It is an **API client
 like every other**, talking to the daemon over the Unix socket (§3.2), plus one
 privileged extra responsibility: installing and supervising the daemon's
