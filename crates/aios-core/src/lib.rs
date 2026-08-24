@@ -12,6 +12,7 @@ pub mod detect;
 pub mod error;
 pub mod managed;
 pub mod registry;
+pub mod store;
 
 pub use config::Config;
 
