@@ -25,6 +25,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aios-claude"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-core",
+ "aios-types",
+ "serde_json",
+]
+
+[[package]]
 name = "aios-cli"
 version = "0.1.0"
 dependencies = [
@@ -40,6 +50,16 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
+]
+
+[[package]]
+name = "aios-codex"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-core",
+ "aios-types",
+ "serde_json",
 ]
 
 [[package]]
