@@ -110,6 +110,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "aios-runs"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-claude",
+ "aios-codex",
+ "aios-core",
+ "aios-types",
+ "serde",
+ "serde_json",
+ "time",
+ "ulid",
+]
+
+[[package]]
 name = "aios-types"
 version = "0.1.0"
 dependencies = [
