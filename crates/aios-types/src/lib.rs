@@ -25,6 +25,7 @@ pub mod inputs;
 pub mod issue;
 pub mod knowledge;
 pub mod project;
+pub mod run;
 pub mod vcs;
 
 pub use ids::ProjectId;
@@ -35,6 +36,10 @@ pub use inputs::{
 pub use issue::{Issue, IssueQuery, IssueStatus, NewIssue};
 pub use knowledge::{Note, NoteHit, NoteRef, Scope, WriteNote};
 pub use project::{NewProject, Project, ProjectDetection, ProjectSummary};
+pub use run::{
+    Approval, ApprovalId, ApprovalState, Decider, HarnessId, MessageRole, Run, RunEvent, RunId,
+    RunStatus,
+};
 pub use vcs::{Commit, FileChange, RepoStatus};
 
 /// Wire-format timestamp. Always serialized as RFC 3339.

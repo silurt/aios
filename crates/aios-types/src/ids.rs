@@ -5,14 +5,23 @@
 //! by creation time, which means `ORDER BY id` is `ORDER BY created_at` without
 //! an index on the timestamp.
 
-use serde::{Deserialize, Serialize};
-use std::fmt;
-use utoipa::ToSchema;
-
+#[macro_export]
 macro_rules! newtype_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, ToSchema)]
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            PartialOrd,
+            Ord,
+            Hash,
+            ::serde::Serialize,
+            ::serde::Deserialize,
+            ::utoipa::ToSchema,
+            ::schemars::JsonSchema,
+        )]
         #[serde(transparent)]
         pub struct $name(pub String);
 
@@ -22,14 +31,14 @@ macro_rules! newtype_id {
             }
         }
 
-        impl fmt::Display for $name {
-            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        impl ::std::fmt::Display for $name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
                 f.write_str(&self.0)
             }
         }
 
-        impl From<String> for $name {
-            fn from(s: String) -> Self {
+        impl From<::std::string::String> for $name {
+            fn from(s: ::std::string::String) -> Self {
                 Self(s)
             }
         }
