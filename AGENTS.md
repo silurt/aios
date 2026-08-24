@@ -166,3 +166,22 @@ Tier 0  the aios binary       ->  Tier 1  local desktop client  ->  Tier 2  mobi
   other surface is an API client.
 - The `IssueTracker` port goes through the `bd` CLI. Never read `.beads/` directly.
 - `openapi.json` is generated and committed; it is the contract for all clients.
+
+## Types and API compatibility
+
+**Every type that crosses a boundary is defined once, in `crates/aios-types`, and
+nowhere else.** OpenAPI, Swift and TypeScript models are all derived from it. See
+`docs/plan.md` §15.
+
+- Derive `Serialize, Deserialize, ToSchema` on every wire type. `#[utoipa::path]`
+  will not compile without `ToSchema`, so a type cannot reach the API without
+  entering the derivation chain.
+- `#[serde(rename_all = "camelCase")]` everywhere.
+- Enums are **internally tagged**: `#[serde(tag = "type", rename_all = "camelCase")]`.
+  Untagged and externally-tagged enums generate poor or wrong Swift.
+- Newtype ids (`ProjectId`, `RunId`), never bare `String`. No `serde_json::Value`
+  in wire types.
+- After changing any wire type run `just openapi`. The committed `openapi.json`
+  being stale is a CI and pre-commit failure.
+- Changing the spec requires bumping `apiVersion`; a *breaking* change also raises
+  `minClientApi`. CI classifies which via `oasdiff` and fails if the bump is missing.

@@ -19,6 +19,7 @@
 | 6 | Transport | **Direct device-to-device** — mDNS on LAN, Tailscale P2P off-LAN. No relay. | No server we run sits between daemon and app, and none that anyone runs can read the traffic. §13.1 |
 | 7 | Push | **None** | No custody of push tokens or an APNs key until the app warrants securing them. Removes the last third party from the data path; forces approvals to be policy-driven rather than interrupt-driven, which is better anyway. §13.3 |
 | 8 | Process model | **One binary, three modes** — `aios serve` (daemon), `aios <cmd>` (CLI client), managed LaunchAgent | Same executable however it is started; the Mac app installs and supervises it, but never owns it. §3.1 |
+| 11 | Type & version contract | **`crates/aios-types` is the single definition**; OpenAPI, Swift and TS are derived. Separate monotonic `apiVersion`, negotiated per request. | The compiler blocks untyped API surface, a staleness gate blocks unregenerated specs, and `oasdiff` decides version bumps mechanically — so incompatible builds cannot ship quietly, and skew is reported precisely in both directions. §15 |
 | 10 | Repo shape | **One polyglot monorepo** — Rust crates, Apple apps, TS client, docs, issues | The OpenAPI spec is a seam *inside* the repo, so a capability change and every client that consumes it land in one commit. Split repos would make each schema change a multi-repo dance with version pinning. §11.1 |
 | 9 | Client tiers | **Binary → desktop → mobile**, always and per feature. macOS/iOS are the first implementations of the two client roles. Next.js web UI dropped. | Clients hold presentation only; the CLI being complete is what keeps them honest. Two SwiftUI targets over one shared `AIOSKit` also costs far less than a React admin *and* a SwiftUI admin. §1.1, §14 |
 
@@ -473,6 +474,8 @@ generated seam between them.
 ```
 aios/
   crates/
+    aios-types/        # THE wire types — serde + utoipa. Nothing crosses a
+                       #   boundary without being defined here (§15)
     aios-cli/          # the binary: `aios` — serve | client | daemon lifecycle
     aios-core/         # registry, state, config, event bus, types
     aios-caps/         # capability registry, port traits, serde schemas
@@ -770,10 +773,10 @@ definition, no drift possible upstream of the spec.
 
 Guardrails:
 
-- `cargo xtask openapi` regenerates `openapi.json`.
-- CI (or a pre-commit hook) fails if the committed spec is stale relative to the
-  handlers. This is the single seam where drift could re-enter, so it gets a hard
-  check.
+- `just openapi` regenerates `openapi.json`; CI and a pre-commit hook fail if the
+  committed spec is stale. See **§15** for the full contract — the single-definition
+  rule, the serde representation house style, round-trip fixtures, and runtime
+  version negotiation.
 
 ### 13.7 Native capabilities worth building (no-push variants)
 
@@ -912,3 +915,124 @@ mDNS, no Tailscale, no device pairing and no push story, because it talks over a
 Unix socket to a daemon on the same machine. It also builds the `AIOSKit` layer the
 iOS app will then reuse. Building it first means the iOS app reduces to
 transport, pairing, and a triage UI over an already-proven client library.
+
+---
+
+## 15. Type sharing and API compatibility
+
+Two guarantees, both enforced by tooling rather than by remembering:
+
+1. **One definition per type.** A wire type is written once, in Rust. Every other
+   representation — OpenAPI schema, Swift model, TypeScript model — is *derived*.
+2. **Incompatible builds cannot ship silently.** When the contract changes, either
+   the clients regenerate or CI fails; and at runtime, a client and daemon that
+   disagree say so precisely instead of failing at the decode site.
+
+### 15.1 One definition — the derivation chain
+
+Every type that crosses a boundary lives in **`crates/aios-types`**, and nowhere
+else:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    pub id: ProjectId,
+    pub slug: String,
+    pub path: Utf8PathBuf,
+    pub issue_prefix: Option<String>,
+}
+```
+
+```
+crates/aios-types  (serde + utoipa::ToSchema)
+        │
+        ├─ serde ──────────▶ the wire format itself
+        ├─ utoipa ─────────▶ openapi.json   (generated, committed)
+        │                        ├─ swift-openapi-generator ─▶ AIOSKit models
+        │                        └─ openapi-typescript ──────▶ clients/ts
+        └─ used directly by aios-api handlers, aios-mcp tools, aios-cli output
+```
+
+**The first guard is the Rust compiler.** `#[utoipa::path(...)]` on a handler will
+not compile unless every request and response type implements `ToSchema`. A type
+cannot reach the API without entering the derivation chain — that is a compile
+error, not a review comment.
+
+**House rules that keep the generated output sane:**
+
+- `#[serde(rename_all = "camelCase")]` on everything, so Swift and TS get idiomatic
+  names with no per-client mapping layer.
+- **Tagged enums, always internally tagged:** `#[serde(tag = "type", rename_all =
+  "camelCase")]`. This is where Rust↔OpenAPI drift actually happens in practice —
+  OpenAPI has no native sum type, and serde's *untagged* and *externally tagged*
+  representations both generate poor and sometimes wrong Swift. Internally tagged
+  enums map cleanly onto `oneOf` + `discriminator` and produce real Swift enums.
+- Newtypes for ids (`ProjectId`, `RunId`, `ApprovalId`) so the generated clients
+  cannot transpose two strings.
+- No `serde_json::Value` in wire types. An untyped hole is a hole in the contract.
+
+**Round-trip contract tests.** Schema agreement is not the same as *representation*
+agreement. Golden JSON fixtures live in `crates/aios-types/fixtures/`, asserted in
+Rust tests and decoded again by Swift tests in `AIOSKit`. If a serde attribute
+changes the shape in a way the generator does not model, a test fails on both sides
+rather than a device failing to decode in the field.
+
+### 15.2 The staleness gate
+
+`just openapi` regenerates `openapi.json`. CI and a pre-commit hook run it and then
+`git diff --exit-code`. **A changed type with an unregenerated spec cannot be
+committed.** This single check is what makes the rest of the section true rather
+than aspirational.
+
+### 15.3 API version — two numbers, not one
+
+The repo has one version (§11.1), but the *contract* needs its own, because the repo
+version bumps constantly for reasons that do not touch the API:
+
+| Field | Meaning |
+| ----- | ------- |
+| `apiVersion: u32` | Monotonic integer. Bumps **only** when `openapi.json` changes. Compatibility is decided by integer comparison — no semver range logic anywhere. |
+| `minClientApi: u32` | The oldest client contract this daemon still serves. Raised only on a breaking change. |
+| `daemonVersion` | Repo semver + build hash. Diagnostics and display only, never used for compatibility decisions. |
+
+**Bumping is mechanical, not a judgement call.** CI already knows the spec changed
+(§15.2); `oasdiff --check-breaking` then classifies *how*:
+
+| Spec change | Required action | Effect on old clients |
+| ----------- | --------------- | --------------------- |
+| Additive (new endpoint, new optional field) | bump `apiVersion` | keep working |
+| Breaking (field removed, type changed, new required field) | bump `apiVersion` **and** raise `minClientApi` | cleanly rejected, told to update |
+| None | nothing | — |
+
+CI fails if the spec changed and `apiVersion` did not — so forgetting to bump is not
+a failure mode that reaches a client.
+
+### 15.4 Runtime negotiation — both directions
+
+Each generated client compiles in the `apiVersion` of the spec it was built from,
+and sends it on every request:
+
+```
+X-AIOS-Api-Version: 7
+```
+
+The daemon compares and answers precisely. Note that skew runs **both ways** — the
+common real case is not an old app against a new daemon, but an updated app against
+a **LaunchAgent still running the previous binary because it was never restarted**:
+
+| Situation | Response | Client shows |
+| --------- | -------- | ------------ |
+| `client == daemon` | normal | nothing |
+| `minClientApi <= client < daemon` | served, plus `X-AIOS-Api-Deprecated: true` | "Interfacing with an older API version — update when convenient" |
+| `client < minClientApi` | `426 Upgrade Required`, structured body with both versions | "This app is too old for the daemon" — blocking, with the specific action |
+| `client > daemon` | `426`, same structured body | "The daemon is older than this app." On macOS this offers **Restart daemon**, since the app bundles the newer binary and this is usually one click. |
+
+`AIOSKit` models this once as a `CompatibilityState` — `.compatible`,
+`.clientDeprecated`, `.clientTooOld`, `.daemonTooOld` — checked on connect and
+surfaced by each app in its own idiom: a banner on macOS, a full-screen state on
+iOS. Per §1.1 the *rule* lives in the daemon and the *rendering* in the client.
+
+The daemon also serves the live `/openapi.json`, so a mismatch can always be
+diagnosed against the running instance rather than against a build artifact someone
+has to go find.
