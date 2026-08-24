@@ -45,6 +45,15 @@ pub enum ProjectCommand {
     /// Remove a project from the registry (does not touch the directory)
     #[command(visible_alias = "rm")]
     Remove { project: String },
+
+    /// Open a project's stored document in $EDITOR
+    ///
+    /// These files are meant to be edited by hand. This just saves you finding
+    /// the path, and checks the result afterwards.
+    Edit {
+        #[arg(default_value = ".")]
+        project: String,
+    },
 }
 
 pub fn run(cmd: ProjectCommand, json: bool) -> Result<()> {
@@ -60,6 +69,7 @@ pub fn run(cmd: ProjectCommand, json: bool) -> Result<()> {
         ProjectCommand::Show { project } => show(&project, json),
         ProjectCommand::Refresh { project } => refresh(&project, json),
         ProjectCommand::Remove { project } => remove(&project, json),
+        ProjectCommand::Edit { project } => edit(&project),
     }
 }
 
@@ -206,4 +216,54 @@ fn join_or_dash(items: &[String]) -> String {
     } else {
         items.join(", ")
     }
+}
+
+fn edit(needle: &str) -> Result<()> {
+    let registry = aios_core::Registry::open()?;
+    // By storage id, not by `project.slug`: hand-editing can make them
+    // disagree, and this must open the file that actually exists.
+    let (id, _) = registry.locate(needle)?;
+    let path = registry.document_path(needle)?;
+
+    // VISUAL before EDITOR is the long-standing convention: EDITOR may be a
+    // line editor meant for dumb terminals.
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+
+    // Through a shell, because EDITOR is routinely set to something with
+    // arguments ("code --wait", "emacsclient -nw").
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\"",))
+        .arg("sh")
+        .arg(&path)
+        .status()
+        .with_context(|| format!("could not launch {editor}"))?;
+
+    if !status.success() {
+        anyhow::bail!("{editor} exited with {status}");
+    }
+
+    // Check immediately rather than letting a typo surface three commands
+    // later as a confusing failure somewhere else.
+    let problems = aios_core::Registry::open()?.validate();
+    let mine: Vec<_> = problems
+        .iter()
+        .filter(|p| p.file.ends_with(&format!("{id}.json")))
+        .collect();
+
+    if mine.is_empty() {
+        println!(
+            "{} {}",
+            green("ok"),
+            dim(&tilde(&path.display().to_string()))
+        );
+    } else {
+        for p in mine {
+            println!("{} {}", crate::render::yellow("!"), p.detail);
+            println!("  {} {}", dim("fix:"), p.fix);
+        }
+    }
+    Ok(())
 }

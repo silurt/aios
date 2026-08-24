@@ -147,3 +147,116 @@ fn slugify_collapses_separators_and_trims() {
     );
     assert_eq!(detect::slugify("!!!"), "");
 }
+
+/// Write a project document directly, the way a person editing `~/.aios` would.
+fn handwrite(root: &std::path::Path, filename: &str, slug: &str, path: &str) {
+    std::fs::create_dir_all(root.join("projects")).unwrap();
+    std::fs::write(
+        root.join("projects").join(format!("{filename}.json")),
+        format!(
+            r#"{{"id":"01TEST00000000000000000000","slug":"{slug}","name":"n","path":"{path}",
+               "gitRemote":null,"defaultBranch":null,"languages":[],"packageManager":null,
+               "issuePrefix":null,"tags":[],
+               "createdAt":"2026-08-24T00:00:00Z","updatedAt":"2026-08-24T00:00:00Z"}}"#
+        ),
+    )
+    .unwrap();
+}
+
+fn registry_root(name: &str) -> std::path::PathBuf {
+    let root = std::env::temp_dir().join(format!("aios-reg-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    root
+}
+
+#[test]
+fn validate_reports_a_filename_that_disagrees_with_its_slug() {
+    let root = registry_root("mismatch");
+    let dir = temp_dir("mismatch-target");
+    handwrite(
+        &root,
+        "filed-here",
+        "says-there",
+        &dir.display().to_string(),
+    );
+
+    let problems = Registry::at(&root).validate();
+    assert_eq!(problems.len(), 1, "{problems:?}");
+    assert!(problems[0].detail.contains("filed-here"));
+    assert!(problems[0].detail.contains("says-there"));
+}
+
+#[test]
+fn validate_reports_a_path_that_no_longer_exists() {
+    let root = registry_root("missingpath");
+    handwrite(&root, "gone", "gone", "/definitely/not/here");
+
+    let problems = Registry::at(&root).validate();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.detail.contains("no longer exists")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn validate_reports_two_projects_claiming_one_directory() {
+    let root = registry_root("dupepath");
+    let dir = temp_dir("dupepath-target").display().to_string();
+    handwrite(&root, "one", "one", &dir);
+    handwrite(&root, "two", "two", &dir);
+
+    let problems = Registry::at(&root).validate();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.detail.contains("also registered as")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn a_mismatched_document_is_updated_in_place_and_not_forked() {
+    // Writing by `project.slug` instead of the filename would create a second
+    // document and leave the original stale.
+    let root = registry_root("inplace");
+    let dir = temp_dir("inplace-target");
+    handwrite(
+        &root,
+        "filename",
+        "different-slug",
+        &dir.display().to_string(),
+    );
+    let reg = Registry::at(&root);
+
+    reg.refresh("filename").unwrap();
+    let files: Vec<_> = std::fs::read_dir(root.join("projects"))
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        files,
+        vec!["filename.json".to_string()],
+        "refresh forked a document"
+    );
+}
+
+#[test]
+fn a_mismatched_document_is_actually_deleted() {
+    // Deleting by `project.slug` would silently miss the real file.
+    let root = registry_root("deletemismatch");
+    let dir = temp_dir("deletemismatch-target");
+    handwrite(
+        &root,
+        "filename",
+        "different-slug",
+        &dir.display().to_string(),
+    );
+    let reg = Registry::at(&root);
+
+    reg.remove("filename").unwrap();
+    assert_eq!(reg.count().unwrap(), 0);
+}

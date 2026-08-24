@@ -74,6 +74,19 @@ impl DocStore {
     /// hand-edited it badly would be far more confusing than an error naming
     /// the file.
     pub fn list<T: DeserializeOwned>(&self, collection: &str) -> Result<Vec<T>> {
+        Ok(self
+            .list_with_ids::<T>(collection)?
+            .into_iter()
+            .map(|(_, doc)| doc)
+            .collect())
+    }
+
+    /// Every document with the id it is filed under.
+    ///
+    /// The id comes from the filename, which is what lookups use. Callers that
+    /// need to check a document's own id field against the one it is stored
+    /// under — hand-editing makes them disagree — need both.
+    pub fn list_with_ids<T: DeserializeOwned>(&self, collection: &str) -> Result<Vec<(String, T)>> {
         let dir = self.collection_dir(collection);
         let entries = match std::fs::read_dir(&dir) {
             Ok(e) => e,
@@ -90,7 +103,13 @@ impl DocStore {
 
         paths
             .iter()
-            .map(|p| decode(p, &std::fs::read_to_string(p)?))
+            .map(|p| {
+                let id = p
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                Ok((id, decode(p, &std::fs::read_to_string(p)?)?))
+            })
             .collect()
     }
 
@@ -152,20 +171,36 @@ impl DocStore {
     }
 }
 
+/// Decode a stored document.
+///
+/// Accepts two shapes, deliberately. AIOS *writes* the envelope, but a file you
+/// wrote by hand will not have one — and being able to hand-write these files
+/// is the point of storing JSON at all. So a bare document is accepted and
+/// treated as the current schema.
+///
+/// Liberal in what it accepts, strict in what it emits: the next write puts the
+/// envelope back, so a hand-written file is adopted rather than left as a
+/// second format to support forever.
 fn decode<T: DeserializeOwned>(path: &Path, text: &str) -> Result<T> {
-    let envelope: Envelope<T> = serde_json::from_str(text).map_err(|e| {
+    if let Ok(envelope) = serde_json::from_str::<Envelope<T>>(text) {
+        if envelope.schema_version > SCHEMA_VERSION {
+            return Err(Error::Invalid(format!(
+                "{} was written by a newer aios (schema {} > {}); upgrade rather than downgrade",
+                path.display(),
+                envelope.schema_version,
+                SCHEMA_VERSION
+            )));
+        }
+        return Ok(envelope.data);
+    }
+
+    // No envelope: a hand-written document. Report *this* error if it also
+    // fails, since it is the one a person editing the file needs to see — the
+    // envelope error would just say "missing field `data`".
+    serde_json::from_str::<T>(text).map_err(|e| {
         Error::Invalid(format!(
             "{} is not a valid AIOS document: {e}",
             path.display()
         ))
-    })?;
-    if envelope.schema_version > SCHEMA_VERSION {
-        return Err(Error::Invalid(format!(
-            "{} was written by a newer aios (schema {} > {}); upgrade rather than downgrade",
-            path.display(),
-            envelope.schema_version,
-            SCHEMA_VERSION
-        )));
-    }
-    Ok(envelope.data)
+    })
 }

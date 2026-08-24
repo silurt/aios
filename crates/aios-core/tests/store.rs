@@ -265,3 +265,83 @@ fn missing_log_reads_as_empty_rather_than_erroring() {
     assert_eq!(log.last_seq().unwrap(), 0);
     assert!(log.read_since::<Thing>(0, 10).unwrap().is_empty());
 }
+
+#[test]
+fn accepts_a_hand_written_document_without_an_envelope() {
+    // Being able to write these files by hand is the point of storing JSON.
+    let root = temp("handwritten");
+    let store = DocStore::new(&root);
+    std::fs::create_dir_all(root.join("things")).unwrap();
+    std::fs::write(
+        root.join("things/mine.json"),
+        r#"{"name":"by hand","count":7}"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        store.get::<Thing>("things", "mine").unwrap(),
+        Some(Thing {
+            name: "by hand".into(),
+            count: 7
+        })
+    );
+}
+
+#[test]
+fn adopts_a_hand_written_document_on_the_next_write() {
+    // Liberal in what it accepts, strict in what it emits — otherwise the bare
+    // form becomes a second format to support forever.
+    let root = temp("adopt");
+    let store = DocStore::new(&root);
+    std::fs::create_dir_all(root.join("things")).unwrap();
+    std::fs::write(root.join("things/m.json"), r#"{"name":"x","count":1}"#).unwrap();
+
+    let thing: Thing = store.get("things", "m").unwrap().unwrap();
+    store.put("things", "m", &thing).unwrap();
+
+    let raw: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(root.join("things/m.json")).unwrap())
+            .unwrap();
+    assert_eq!(raw["schemaVersion"], 1);
+}
+
+#[test]
+fn a_broken_hand_edit_reports_the_useful_error() {
+    // The envelope error would say "missing field `data`", which tells someone
+    // editing the file nothing. They need the error about their own JSON.
+    let root = temp("brokenedit");
+    let store = DocStore::new(&root);
+    std::fs::create_dir_all(root.join("things")).unwrap();
+    std::fs::write(
+        root.join("things/b.json"),
+        r#"{"name":"x","count":"not a number"}"#,
+    )
+    .unwrap();
+
+    let err = store.get::<Thing>("things", "b").unwrap_err().to_string();
+    assert!(err.contains("b.json"), "should name the file: {err}");
+    assert!(
+        !err.contains("`data`"),
+        "should not leak the envelope: {err}"
+    );
+}
+
+#[test]
+fn list_with_ids_reports_the_filename_not_a_field() {
+    let root = temp("ids");
+    let store = DocStore::new(&root);
+    store
+        .put(
+            "things",
+            "filed-as",
+            &Thing {
+                name: "called".into(),
+                count: 1,
+            },
+        )
+        .unwrap();
+
+    let listed = store.list_with_ids::<Thing>("things").unwrap();
+    assert_eq!(listed[0].0, "filed-as");
+    assert_eq!(listed[0].1.name, "called");
+}

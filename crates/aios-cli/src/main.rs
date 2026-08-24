@@ -147,6 +147,10 @@ fn doctor(json: bool) -> Result<()> {
         ),
     ];
 
+    // These files are meant to be hand-edited, so checking them is part of a
+    // health check rather than an afterthought.
+    let problems = registry.validate();
+
     if json {
         let out: Vec<_> = checks
             .iter()
@@ -154,11 +158,16 @@ fn doctor(json: bool) -> Result<()> {
                 serde_json::json!({ "check": name, "detail": detail, "ok": ok })
             })
             .collect();
+        let issues: Vec<_> = problems
+            .iter()
+            .map(|p| serde_json::json!({ "file": p.file, "detail": p.detail, "fix": p.fix }))
+            .collect();
         println!(
             "{}",
             serde_json::to_string_pretty(&serde_json::json!({
                 "checks": out,
-                "projects": registry.count()?,
+                "problems": issues,
+                "projects": registry.count().unwrap_or(0),
             }))?
         );
         return Ok(());
@@ -183,7 +192,20 @@ fn doctor(json: bool) -> Result<()> {
         println!("{mark} {name:<16} {}", render::dim(detail));
     }
     println!();
-    println!("{} projects registered", registry.count()?);
+    if problems.is_empty() {
+        println!("{} projects registered", registry.count()?);
+    } else {
+        println!(
+            "{} {} problem(s) in ~/.aios:",
+            render::yellow("!"),
+            problems.len()
+        );
+        for p in &problems {
+            println!("  {}", render::bold(&p.file));
+            println!("    {}", p.detail);
+            println!("    {} {}", render::dim("fix:"), p.fix);
+        }
+    }
     Ok(())
 }
 

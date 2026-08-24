@@ -17,6 +17,20 @@ use time::OffsetDateTime;
 
 const COLLECTION: &str = "projects";
 
+/// Something wrong with a hand-edited store, described well enough to fix.
+///
+/// Not a wire type yet — this is diagnostic output for `aios doctor`. If it
+/// ever becomes a capability it moves to `aios-types` like everything else that
+/// crosses a boundary (§15).
+#[derive(Debug, Clone)]
+pub struct Problem {
+    /// The file it concerns, relative to `~/.aios`.
+    pub file: String,
+    pub detail: String,
+    /// What to do about it.
+    pub fix: String,
+}
+
 pub struct Registry {
     store: DocStore,
 }
@@ -129,35 +143,50 @@ impl Registry {
             .collect())
     }
 
-    /// Resolve by slug, then id, then path — so `aios project show .` works
-    /// from inside a project without knowing its slug.
-    pub fn resolve(&self, needle: &str) -> Result<Project> {
-        // Only try the direct document lookup when the needle could *be* a
-        // slug. A path contains separators, which the store rejects as an
-        // unsafe document id — that rejection is correct, but here it means
-        // "not a slug", not "invalid input", so it must not surface.
+    /// Resolve, returning the storage id alongside the project.
+    ///
+    /// The storage id is the *filename*, which is what every lookup and write
+    /// must use. It normally equals `project.slug`, but these files are
+    /// hand-editable and the two can disagree — writing to `project.slug`
+    /// would then create a second document instead of updating this one, and
+    /// deleting by it would silently miss. `validate` reports the mismatch;
+    /// this makes sure it stays a report rather than corruption.
+    pub fn locate(&self, needle: &str) -> Result<(String, Project)> {
         if detect::slugify(needle) == needle
             && let Some(p) = self.store.get::<Project>(COLLECTION, needle)?
         {
-            return Ok(p);
+            return Ok((needle.to_string(), p));
         }
-        let all = self.all()?;
-        if let Some(p) = all.iter().find(|p| p.id.as_str() == needle) {
-            return Ok(p.clone());
+        let all = self.store.list_with_ids::<Project>(COLLECTION)?;
+        if let Some((id, p)) = all.iter().find(|(_, p)| p.id.as_str() == needle) {
+            return Ok((id.clone(), p.clone()));
         }
         if let Ok(canonical) = std::fs::canonicalize(needle) {
             let canonical = canonical.display().to_string();
-            if let Some(p) = all.iter().find(|p| p.path == canonical) {
-                return Ok(p.clone());
+            if let Some((id, p)) = all.iter().find(|(_, p)| p.path == canonical) {
+                return Ok((id.clone(), p.clone()));
             }
         }
         Err(Error::ProjectNotFound(needle.to_string()))
     }
 
+    /// Where a project's document lives on disk. These files are meant to be
+    /// opened and edited, so knowing this is part of the public surface.
+    pub fn document_path(&self, needle: &str) -> Result<std::path::PathBuf> {
+        let (id, _) = self.locate(needle)?;
+        Ok(crate::config::projects_dir().join(format!("{id}.json")))
+    }
+
+    /// Resolve by slug, then id, then path — so `aios project show .` works
+    /// from inside a project without knowing its slug.
+    pub fn resolve(&self, needle: &str) -> Result<Project> {
+        Ok(self.locate(needle)?.1)
+    }
+
     pub fn remove(&self, needle: &str) -> Result<Project> {
         self.store.with_lock(|| {
-            let project = self.resolve(needle)?;
-            self.store.delete(COLLECTION, &project.slug)?;
+            let (id, project) = self.locate(needle)?;
+            self.store.delete(COLLECTION, &id)?;
             Ok(project)
         })
     }
@@ -168,7 +197,7 @@ impl Registry {
     /// renamed, beads gets initialized later, a lockfile changes.
     pub fn refresh(&self, needle: &str) -> Result<Project> {
         self.store.with_lock(|| {
-            let mut project = self.resolve(needle)?;
+            let (id, mut project) = self.locate(needle)?;
             let d = detect::detect(std::path::Path::new(&project.path));
             project.git_remote = d.git_remote;
             project.default_branch = d.default_branch;
@@ -176,12 +205,87 @@ impl Registry {
             project.package_manager = d.package_manager;
             project.issue_prefix = d.issue_prefix;
             project.updated_at = OffsetDateTime::now_utc();
-            self.store.put(COLLECTION, &project.slug, &project)?;
+            self.store.put(COLLECTION, &id, &project)?;
             Ok(project)
         })
     }
 
     pub fn count(&self) -> Result<usize> {
         Ok(self.all()?.len())
+    }
+
+    /// Check the store for the mistakes hand-editing actually produces.
+    ///
+    /// Reports everything it finds rather than failing on the first problem: if
+    /// you edited three files, you want all three answers, not three
+    /// invocations. Read-only — nothing here changes anything on disk.
+    pub fn validate(&self) -> Vec<Problem> {
+        let mut problems = Vec::new();
+
+        let projects = match self.store.list_with_ids::<Project>(COLLECTION) {
+            Ok(p) => p,
+            Err(e) => {
+                problems.push(Problem {
+                    file: format!("{COLLECTION}/"),
+                    detail: e.to_string(),
+                    fix: "fix the JSON, or move the file aside".into(),
+                });
+                return problems;
+            }
+        };
+
+        let mut seen_paths: std::collections::HashMap<&str, &str> =
+            std::collections::HashMap::new();
+
+        for (filename, project) in &projects {
+            let file = format!("{COLLECTION}/{filename}.json");
+
+            // Lookups go by filename; `list` reports the field. When they
+            // disagree the project answers to two different names, so say which
+            // to change rather than silently picking one.
+            if filename != &project.slug {
+                problems.push(Problem {
+                    file: file.clone(),
+                    detail: format!(
+                        "filename says {filename:?} but the `slug` field says {:?}",
+                        project.slug
+                    ),
+                    fix: format!(
+                        "make them match — rename the file to {}.json, or set `slug` to {filename:?}",
+                        project.slug
+                    ),
+                });
+            }
+
+            // The slug is both the filename and a field. They must agree, and
+            // guessing which one you meant would be worse than saying so.
+            if detect::slugify(&project.slug) != project.slug {
+                problems.push(Problem {
+                    file: file.clone(),
+                    detail: format!("slug {:?} is not slug-shaped", project.slug),
+                    fix: format!(
+                        "rename it to {:?} in both the filename and the `slug` field",
+                        detect::slugify(&project.slug)
+                    ),
+                });
+            }
+
+            if !std::path::Path::new(&project.path).is_dir() {
+                problems.push(Problem {
+                    file: file.clone(),
+                    detail: format!("path {} no longer exists", project.path),
+                    fix: format!("update `path`, or run `aios project rm {}`", project.slug),
+                });
+            }
+
+            if let Some(other) = seen_paths.insert(&project.path, &project.slug) {
+                problems.push(Problem {
+                    file: file.clone(),
+                    detail: format!("path {} is also registered as {:?}", project.path, other),
+                    fix: "remove one of them; a directory is one project".into(),
+                });
+            }
+        }
+        problems
     }
 }
