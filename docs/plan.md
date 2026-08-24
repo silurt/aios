@@ -226,11 +226,16 @@ repo" was not true as configured. Resolution, in keeping with local-first:
   `bd import`.
 - The local Dolt DB remains the source of truth and keeps full history; the JSONL
   is an export, and beads is explicit that it is not a backup.
-- A **Dolt remote** gives true multi-machine sync with full history, and it rides
-  the **git remote** — `bd dolt remote add origin <git-remote-url>` then
-  `bd dolt push`. No DoltHub, no third-party host, so it does not cut against
-  §13.8. Do this as soon as the repo has an origin; until then the JSONL export is
-  the only copy outside the local Dolt DB.
+- **A Dolt remote is now configured, and it rides the git remote.** `bd dolt remote
+  add origin git@github.com:silurt/aios.git` + `bd dolt push` works, so there is no
+  DoltHub and no third-party host — it does not cut against §13.8. Beads stores the
+  database under its own ref namespace, **`refs/dolt/data`**, plus a
+  `__dolt_remote_info__` branch; `refs/heads/main` is untouched, so a normal clone
+  or a GitHub diff never sees Dolt internals.
+- Consequence: **full issue history syncs with the repo**, and the JSONL export is
+  demoted to convenience — a human-readable view for diffs and for reading issues
+  without `bd`. Beads deletes it entirely when there are no issues, which is why it
+  is absent from the tree right now.
 
 Practical consequence for AIOS: the `IssueTracker` port must treat `bd` as the
 interface and never read `.beads/` files directly, because the on-disk layout is
