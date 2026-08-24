@@ -19,6 +19,7 @@
 | 6 | Transport | **Direct device-to-device** — mDNS on LAN, Tailscale P2P off-LAN. No relay. | No server we run sits between daemon and app, and none that anyone runs can read the traffic. §13.1 |
 | 7 | Push | **None** | No custody of push tokens or an APNs key until the app warrants securing them. Removes the last third party from the data path; forces approvals to be policy-driven rather than interrupt-driven, which is better anyway. §13.3 |
 | 8 | Process model | **One binary, three modes** — `aios serve` (daemon), `aios <cmd>` (CLI client), managed LaunchAgent | Same executable however it is started; the Mac app installs and supervises it, but never owns it. §3.1 |
+| 10 | Repo shape | **One polyglot monorepo** — Rust crates, Apple apps, TS client, docs, issues | The OpenAPI spec is a seam *inside* the repo, so a capability change and every client that consumes it land in one commit. Split repos would make each schema change a multi-repo dance with version pinning. §11.1 |
 | 9 | Admin UI | **Native macOS SwiftUI app**, sharing a Swift package with the iOS app. Next.js web UI dropped. | Two SwiftUI targets over one shared `AIOSKit` costs far less than maintaining a React admin *and* a SwiftUI admin. §14 |
 
 
@@ -453,6 +454,52 @@ genuinely needed — headless harness modes are JSON over pipes and need none.
 (§14). A browser UI can be added later off the same OpenAPI spec if you ever want
 one, and the generated TS client in `clients/ts/` keeps that door open along with
 any app you build.
+
+### 11.1 Monorepo mechanics
+
+**This is one repository**, explicitly — three toolchains, one history, one version.
+
+**Why it is the right call here:** `openapi.json` is a seam *inside* the repo. A
+capability change regenerates the spec, the Swift client, and the TS client, and all
+of it lands in a single commit that either compiles or doesn't. Split repos would
+turn every schema change into a multi-repo dance with version pinning and a window
+where the clients are wrong — which is precisely the drift §13.6 exists to prevent.
+
+**Three build systems, one entry point:**
+
+| Area | Build system | Root artifact |
+| ---- | ------------ | ------------- |
+| `crates/**` | Cargo workspace (`[workspace] members = ["crates/*"]`) | `aios` binary |
+| `apple/**` | Xcode workspace + SwiftPM (`AIOSKit` as a local package) | `AIOS.app`, `AIOS-iOS.app` |
+| `clients/ts/**` | npm | generated TS client |
+
+A root **`justfile`** is the single entry point — `just build`, `just check`,
+`just openapi`, `just mac` — delegating to `cargo`, `xcodebuild`, and `npm`. It is
+the only tool that spans all three, and it needs no bootstrap beyond `brew install
+just`. Codegen that must run in Rust context (emitting the spec from `utoipa`)
+stays a `cargo xtask` invoked by the justfile, so it needs nothing installed at all.
+
+**Build ordering — the one real coupling.** The Mac app bundles the daemon binary
+in `Contents/Resources/`, so the Xcode build depends on the Cargo build. A run-script
+build phase does `cargo build --release` and copies the result in. Target arm64 only
+unless Intel support is ever wanted; `lipo` is available if so. Keep this
+unidirectional: **Rust never depends on Swift.**
+
+**One version for everything.** Tag at the repo root; app version, daemon version,
+and spec version are the same number by construction. This makes the version-skew
+handling in §14.3 nearly free — mismatch means someone is running a stale build, not
+that two independently-versioned components disagree.
+
+**CI is path-filtered:** Rust jobs on `crates/**`, Swift jobs on `apple/**` (macOS
+runner, the expensive one), and a spec-staleness check that always runs because it
+is the seam that matters.
+
+**Issues stay in one beads DB** (prefix `aios`) for the whole monorepo, partitioned
+by label — `area:core`, `area:mac`, `area:ios`, `area:mcp` — rather than by separate
+databases. Cross-area dependencies are the common case here ("iOS approval triage
+blocked on approvals API"), and beads' dependency graph only works within a DB.
+
+**Dogfooding:** once `aios project add` exists, this repo is its own first entry.
 
 ## 12. Deliberate non-goals (for now)
 
