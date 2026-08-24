@@ -1,45 +1,10 @@
 use crate::context::Context;
 use crate::registry::{Capability, Effect};
 use aios_core::{Error, Result};
-use aios_types::{Note, NoteHit, NoteRef, Scope, WriteNote};
-use serde::Deserialize;
-
-/// Scope defaults to `All` when omitted, and `Project` resolves its slug from
-/// the registry so callers can pass a path or an id instead.
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ScopedInput {
-    pub scope: Option<Scope>,
-    /// Shorthand for `scope: {type: "project", slug: …}`.
-    pub project: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SearchInput {
-    pub query: String,
-    #[serde(default)]
-    pub scope: Option<Scope>,
-    #[serde(default)]
-    pub project: Option<String>,
-    #[serde(default)]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReadInput {
-    pub path: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CaptureInput {
-    pub body: String,
-    pub title: Option<String>,
-    #[serde(default)]
-    pub tags: Vec<String>,
-}
+use aios_types::{
+    CaptureNoteInput, Note, NoteHit, NoteRef, ReadNoteInput, Scope, ScopedInput, SearchNotesInput,
+    WriteNote,
+};
 
 /// Turn the `scope` / `project` pair into one [`Scope`].
 ///
@@ -74,7 +39,7 @@ pub fn register(items: &mut Vec<Capability>) {
         "kb.search",
         "Full-text search across the knowledge base",
         Effect::Read,
-        |ctx: &Context, input: SearchInput| -> Result<Vec<NoteHit>> {
+        |ctx: &Context, input: SearchNotesInput| -> Result<Vec<NoteHit>> {
             let scope = resolve_scope(ctx, input.scope, input.project)?;
             ctx.ports
                 .knowledge
@@ -86,7 +51,9 @@ pub fn register(items: &mut Vec<Capability>) {
         "kb.read",
         "Read one note, with its outgoing wikilinks resolved",
         Effect::Read,
-        |ctx: &Context, input: ReadInput| -> Result<Note> { ctx.ports.knowledge.read(&input.path) },
+        |ctx: &Context, input: ReadNoteInput| -> Result<Note> {
+            ctx.ports.knowledge.read(&input.path)
+        },
     ));
 
     items.push(Capability::new(
@@ -100,7 +67,7 @@ pub fn register(items: &mut Vec<Capability>) {
         "kb.capture",
         "Append a quick note to the inbox without choosing a location",
         Effect::Write,
-        |ctx: &Context, input: CaptureInput| -> Result<Note> {
+        |ctx: &Context, input: CaptureNoteInput| -> Result<Note> {
             // Capture must never require a decision: agents and phones both use
             // it mid-thought. One dated note per day, appended to.
             let today = aios_core::today();

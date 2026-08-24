@@ -1,6 +1,7 @@
 //! The registry's view of a project.
 
 use crate::{ProjectId, Timestamp};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -70,7 +71,7 @@ impl From<Project> for ProjectSummary {
 
 /// Request to register a project. Everything except `path` is optional and
 /// filled in by detection when omitted.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NewProject {
     pub path: String,

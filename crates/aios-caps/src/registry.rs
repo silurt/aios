@@ -17,6 +17,7 @@
 
 use crate::context::Context;
 use aios_core::{Error, Result};
+use schemars::JsonSchema;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -44,6 +45,12 @@ pub struct Capability {
     pub name: &'static str,
     pub summary: &'static str,
     pub effect: Effect,
+    /// JSON Schema for the input, derived from the input type.
+    ///
+    /// This is what an MCP client shows the model as a tool's `inputSchema`, so
+    /// the doc comments on the input struct are load-bearing prompt text rather
+    /// than internal notes.
+    pub input_schema: Value,
     handler: Handler,
 }
 
@@ -61,7 +68,7 @@ impl Capability {
         handler: F,
     ) -> Self
     where
-        I: DeserializeOwned,
+        I: DeserializeOwned + JsonSchema,
         O: Serialize,
         F: Fn(&Context, I) -> Result<O> + Send + Sync + 'static,
     {
@@ -69,6 +76,8 @@ impl Capability {
             name,
             summary,
             effect,
+            input_schema: serde_json::to_value(schemars::schema_for!(I))
+                .expect("a derived JSON Schema is always serializable"),
             handler: Box::new(move |ctx, raw| {
                 let input: I = serde_json::from_value(raw)
                     .map_err(|e| Error::Invalid(format!("invalid input for {name}: {e}")))?;

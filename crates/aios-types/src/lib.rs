@@ -21,12 +21,17 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 pub mod ids;
+pub mod inputs;
 pub mod issue;
 pub mod knowledge;
 pub mod project;
 pub mod vcs;
 
 pub use ids::ProjectId;
+pub use inputs::{
+    CaptureNoteInput, CloseIssueInput, CreateIssueInput, GetIssueInput, ListIssuesInput,
+    ListProjectsInput, LogInput, ProjectRef, ReadNoteInput, ScopedInput, SearchNotesInput,
+};
 pub use issue::{Issue, IssueQuery, IssueStatus, NewIssue};
 pub use knowledge::{Note, NoteHit, NoteRef, Scope, WriteNote};
 pub use project::{NewProject, Project, ProjectDetection, ProjectSummary};

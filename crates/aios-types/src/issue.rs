@@ -5,6 +5,7 @@
 //! later (plan §2) does not require rewriting prompts, skills, the CLI, or any
 //! client.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -33,7 +34,7 @@ pub struct Issue {
 /// Normalized status. A tracker with richer states maps into the nearest of
 /// these and keeps its native value in [`Issue::issue_type`]-adjacent metadata
 /// rather than leaking a tracker-specific variant into the contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum IssueStatus {
     Open,
@@ -78,7 +79,7 @@ pub struct IssueQuery {
     pub limit: Option<u32>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NewIssue {
     pub title: String,

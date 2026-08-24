@@ -7,28 +7,14 @@
 use crate::context::Context;
 use crate::registry::{Capability, Effect};
 use aios_core::Result;
-use aios_types::{NewProject, Project, ProjectSummary};
-use serde::Deserialize;
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct ListInput {
-    pub tag: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-pub struct GetInput {
-    /// Slug, id, or path. Defaults to the current directory.
-    pub project: Option<String>,
-}
+use aios_types::{ListProjectsInput, NewProject, Project, ProjectRef, ProjectSummary};
 
 pub fn register(items: &mut Vec<Capability>) {
     items.push(Capability::new(
         "projects.list",
         "List registered projects",
         Effect::Read,
-        |ctx: &Context, input: ListInput| -> Result<Vec<ProjectSummary>> {
+        |ctx: &Context, input: ListProjectsInput| -> Result<Vec<ProjectSummary>> {
             ctx.registry.list(input.tag.as_deref())
         },
     ));
@@ -37,7 +23,7 @@ pub fn register(items: &mut Vec<Capability>) {
         "projects.get",
         "Show one registered project in full",
         Effect::Read,
-        |ctx: &Context, input: GetInput| -> Result<Project> {
+        |ctx: &Context, input: ProjectRef| -> Result<Project> {
             ctx.project(input.project.as_deref())
         },
     ));

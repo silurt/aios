@@ -4,6 +4,7 @@
 //! which is what Obsidian is on disk. Nothing here mentions Obsidian, so a
 //! different store slots in behind the same port.
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -11,7 +12,7 @@ use utoipa::ToSchema;
 ///
 /// Internally tagged per §15 so this generates a real Swift enum rather than
 /// an awkward optional-soup struct.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Scope {
     /// Knowledge that is not tied to any one project.
@@ -76,7 +77,7 @@ pub struct NoteHit {
     pub excerpt: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteNote {
     /// Vault-relative path. `.md` is appended when missing.

@@ -14,6 +14,11 @@ pub enum CapCommand {
     /// List every capability
     #[command(visible_alias = "ls")]
     List,
+    /// Print the JSON Schema a capability accepts
+    ///
+    /// This is exactly what an MCP client shows the model as `inputSchema`, so
+    /// it is the fastest way to check what an agent will see.
+    Schema { name: String },
     /// Invoke a capability by name with a JSON payload
     Call {
         /// Capability name, e.g. `issues.ready`
@@ -36,6 +41,7 @@ pub fn run(cmd: CapCommand, json: bool) -> Result<()> {
                             "name": c.name,
                             "summary": c.summary,
                             "effect": if c.effect.is_write() { "write" } else { "read" },
+                            "inputSchema": c.input_schema,
                         })
                     })
                     .collect();
@@ -55,6 +61,13 @@ pub fn run(cmd: CapCommand, json: bool) -> Result<()> {
                     dim(c.summary)
                 );
             }
+            Ok(())
+        }
+        CapCommand::Schema { name } => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&caps.get(&name)?.input_schema)?
+            );
             Ok(())
         }
         CapCommand::Call { name, input } => {
