@@ -162,7 +162,10 @@ impl Knowledge for Vault {
     fn read(&self, path: &str) -> Result<Note> {
         let abs = self.resolve(path)?;
         if !abs.is_file() {
-            return Err(Error::ProjectNotFound(format!("note {path}")));
+            return Err(Error::NotFound {
+                kind: "note",
+                id: path.to_string(),
+            });
         }
         let text = std::fs::read_to_string(&abs)?;
         let parsed = frontmatter::parse(&text);

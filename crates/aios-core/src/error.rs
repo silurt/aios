@@ -5,6 +5,11 @@ pub enum Error {
     #[error("no project matching {0:?}")]
     ProjectNotFound(String),
 
+    /// Anything else that was looked up and is not there. Carries its own
+    /// noun, so a missing run does not report itself as a missing project.
+    #[error("no {kind} matching {id:?}")]
+    NotFound { kind: &'static str, id: String },
+
     #[error("{path} is already registered as {slug:?}")]
     PathAlreadyRegistered { path: String, slug: String },
 
@@ -51,7 +56,7 @@ pub type Result<T> = std::result::Result<T, Error>;
 impl Error {
     pub fn kind(&self) -> ErrorKind {
         match self {
-            Error::ProjectNotFound(_) => ErrorKind::NotFound,
+            Error::ProjectNotFound(_) | Error::NotFound { .. } => ErrorKind::NotFound,
             Error::PathAlreadyRegistered { .. } | Error::SlugTaken(_) => ErrorKind::AlreadyExists,
             Error::Invalid(_) | Error::NotADirectory(_) => ErrorKind::InvalidArgument,
             Error::CapabilityNotFound(_) => ErrorKind::NotFound,

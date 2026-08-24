@@ -88,7 +88,10 @@ impl Approvals {
     pub fn get(&self, id: &str) -> Result<Approval> {
         self.store
             .get::<Approval>(COLLECTION, id)?
-            .ok_or_else(|| Error::ProjectNotFound(format!("approval {id}")))
+            .ok_or_else(|| Error::NotFound {
+                kind: "approval",
+                id: id.to_string(),
+            })
     }
 
     /// All approvals, newest first.

@@ -66,8 +66,7 @@ pub enum IssueCommand {
 }
 
 pub fn run(cmd: IssueCommand, json: bool) -> Result<()> {
-    let caps = crate::app::capabilities();
-    let ctx = crate::app::context()?;
+    let client = crate::client::Client::connect()?;
 
     let (name, input) = match &cmd {
         IssueCommand::List {
@@ -121,7 +120,7 @@ pub fn run(cmd: IssueCommand, json: bool) -> Result<()> {
         IssueCommand::Status { project } => ("issues.status", json!({ "project": project })),
     };
 
-    let result = caps.call(&ctx, name, input)?;
+    let result = client.call_capability(name, input)?;
     if json {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());

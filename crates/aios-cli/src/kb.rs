@@ -76,8 +76,7 @@ fn body_or_stdin(body: Option<String>) -> Result<String> {
 }
 
 pub fn run(cmd: KbCommand, json_out: bool) -> Result<()> {
-    let caps = crate::app::capabilities();
-    let ctx = crate::app::context()?;
+    let client = crate::client::Client::connect()?;
 
     let (name, input) = match cmd {
         KbCommand::List {
@@ -119,7 +118,7 @@ pub fn run(cmd: KbCommand, json_out: bool) -> Result<()> {
         ),
     };
 
-    let result = caps.call(&ctx, name, input)?;
+    let result = client.call_capability(name, input)?;
     if json_out {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());

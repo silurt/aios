@@ -10,22 +10,29 @@
 //! commands are written against `Capabilities` rather than the ports directly,
 //! so that swap does not reach into command code.
 
-use aios_caps::{Capabilities, Context, Ports};
+use aios_caps::{Context, Ports};
 use anyhow::{Context as _, Result};
 
 pub fn context() -> Result<Context> {
     let config = aios_core::Config::load()?;
     let registry = aios_core::Registry::open()?;
-    let ports = Ports {
+    Ok(Context::new(config.clone(), registry, ports_for(&config)))
+}
+
+/// Bind the ports to concrete adapters.
+///
+/// This is the composition root — the one place that names beads, Obsidian and
+/// git. Swapping beads for Linear is a change here plus one new crate.
+pub fn ports() -> Result<Ports> {
+    Ok(ports_for(&aios_core::Config::load()?))
+}
+
+fn ports_for(config: &aios_core::Config) -> Ports {
+    Ports {
         issues: Box::new(aios_beads::Beads::new()),
         knowledge: Box::new(aios_obsidian::Vault::new(config.vault.clone())),
         vcs: Box::new(aios_git::Git::new()),
-    };
-    Ok(Context::new(config, registry, ports))
-}
-
-pub fn capabilities() -> Capabilities {
-    Capabilities::all()
+    }
 }
 
 /// The approval policy in force.

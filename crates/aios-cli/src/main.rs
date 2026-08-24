@@ -8,6 +8,8 @@
 mod app;
 mod approval;
 mod cap;
+mod client;
+mod daemon;
 mod gate;
 mod issue;
 mod kb;
@@ -75,6 +77,13 @@ enum Command {
     /// Check that the local installation is healthy
     Doctor,
 
+    /// Run the daemon in the foreground (this is what launchd execs)
+    Serve,
+
+    /// Install and manage the background daemon
+    #[command(subcommand)]
+    Daemon(daemon::DaemonCommand),
+
     /// Print version and API contract information
     Version,
 }
@@ -105,6 +114,8 @@ fn run(command: Command, json: bool) -> Result<()> {
         Command::Mcp(cmd) => mcp::run(cmd),
         Command::Run(cmd) => run::run(cmd, json),
         Command::Approval(cmd) => approval::run(cmd, json),
+        Command::Serve => daemon::serve(),
+        Command::Daemon(cmd) => daemon::run(cmd),
         Command::Doctor => doctor(json),
         Command::Version => version(json),
     }

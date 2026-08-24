@@ -1,9 +1,9 @@
 //! `aios cap …` — the capability registry, exposed directly.
 //!
-//! This is how phase 1 demonstrates §2: the same registration that will become
-//! an MCP tool and a REST route is callable by name, with JSON in and JSON out,
-//! today. If something works here it will work over every later surface, because
-//! it is literally the same handler.
+//! This is how §2 is demonstrated: the same registration that becomes an MCP
+//! tool and a REST route is callable by name, JSON in and JSON out. Everything
+//! here goes through the daemon, so it exercises exactly the path a client
+//! takes rather than a shortcut only the CLI has (§3.1).
 
 use crate::render::{bold, dim, yellow};
 use anyhow::{Context as _, Result};
@@ -16,8 +16,8 @@ pub enum CapCommand {
     List,
     /// Print the JSON Schema a capability accepts
     ///
-    /// This is exactly what an MCP client shows the model as `inputSchema`, so
-    /// it is the fastest way to check what an agent will see.
+    /// Exactly what an MCP client shows the model as `inputSchema`, so it is
+    /// the fastest way to check what an agent will see.
     Schema { name: String },
     /// Invoke a capability by name with a JSON payload
     Call {
@@ -30,44 +30,45 @@ pub enum CapCommand {
 }
 
 pub fn run(cmd: CapCommand, json: bool) -> Result<()> {
-    let caps = crate::app::capabilities();
+    let client = crate::client::Client::connect()?;
     match cmd {
         CapCommand::List => {
+            let listed = client.get("/api/capabilities")?;
             if json {
-                let out: Vec<_> = caps
-                    .iter()
-                    .map(|c| {
-                        serde_json::json!({
-                            "name": c.name,
-                            "summary": c.summary,
-                            "effect": if c.effect.is_write() { "write" } else { "read" },
-                            "inputSchema": c.input_schema,
-                        })
-                    })
-                    .collect();
-                println!("{}", serde_json::to_string_pretty(&out)?);
+                println!("{}", serde_json::to_string_pretty(&listed)?);
                 return Ok(());
             }
-            let width = caps.iter().map(|c| c.name.len()).max().unwrap_or(0);
-            for c in caps.iter() {
-                let effect = if c.effect.is_write() {
+            let items = listed.as_array().cloned().unwrap_or_default();
+            let width = items
+                .iter()
+                .filter_map(|c| c["name"].as_str().map(str::len))
+                .max()
+                .unwrap_or(0);
+            for c in &items {
+                let effect = if c["effect"] == "write" {
                     yellow("write")
                 } else {
                     dim("read ")
                 };
                 println!(
                     "{effect} {}  {}",
-                    bold(&format!("{:<width$}", c.name, width = width)),
-                    dim(c.summary)
+                    bold(&format!(
+                        "{:<width$}",
+                        c["name"].as_str().unwrap_or(""),
+                        width = width
+                    )),
+                    dim(c["summary"].as_str().unwrap_or(""))
                 );
             }
             Ok(())
         }
         CapCommand::Schema { name } => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&caps.get(&name)?.input_schema)?
-            );
+            let listed = client.get("/api/capabilities")?;
+            let found = listed
+                .as_array()
+                .and_then(|a| a.iter().find(|c| c["name"] == name.as_str()))
+                .with_context(|| format!("no capability named {name:?}"))?;
+            println!("{}", serde_json::to_string_pretty(&found["inputSchema"])?);
             Ok(())
         }
         CapCommand::Call { name, input } => {
@@ -78,10 +79,9 @@ pub fn run(cmd: CapCommand, json: bool) -> Result<()> {
             };
             let value: serde_json::Value = serde_json::from_str(raw.trim())
                 .with_context(|| format!("input is not valid JSON: {raw}"))?;
-            let ctx = crate::app::context()?;
             // Output is always JSON: a capability's result is data for a
             // program, and `cap call` is the programmatic door.
-            let result = caps.call(&ctx, &name, value)?;
+            let result = client.call_capability(&name, value)?;
             println!("{}", serde_json::to_string_pretty(&result)?);
             Ok(())
         }

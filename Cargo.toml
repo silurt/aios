@@ -8,6 +8,7 @@ members = [
     "crates/aios-obsidian",
     "crates/aios-git",
     "crates/aios-runs",
+    "crates/aios-api",
     "crates/aios-claude",
     "crates/aios-codex",
     "crates/aios-mcp",
@@ -29,6 +30,7 @@ aios-beads = { path = "crates/aios-beads" }
 aios-obsidian = { path = "crates/aios-obsidian" }
 aios-git = { path = "crates/aios-git" }
 aios-runs = { path = "crates/aios-runs" }
+aios-api = { path = "crates/aios-api" }
 aios-claude = { path = "crates/aios-claude" }
 aios-codex = { path = "crates/aios-codex" }
 aios-mcp = { path = "crates/aios-mcp" }

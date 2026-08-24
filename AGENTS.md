@@ -264,6 +264,35 @@ Rules: never print to stdout from a code path reachable by `approval gate` or
 `mcp serve` -- both are protocol channels. Never treat `RunStatus::Parked` as
 terminal.
 
+## The daemon
+
+`aios serve` runs the daemon: one axum router over a Unix socket at
+`~/.aios/aiosd.sock` (mode 0600). `aios daemon install|start|stop|status|logs`
+manages it as a launchd LaunchAgent.
+
+**The API-only rule is in force.** Only `aios serve` and `aios daemon *` touch
+`aios-core` directly; every other command is an HTTP client over the socket, and
+`crate::client::Client::connect()` autostarts the daemon if it is not running --
+so the rule is not hostile. If a command needs something the API cannot express,
+that is a missing endpoint, not a reason to reach into core.
+
+The one exception is `aios approval gate`, which runs inside a harness process
+and must work regardless of daemon state.
+
+Notes:
+
+- Run events stream over SSE with the sequence number as the event id, so
+  `Last-Event-ID` resumes exactly where a dropped connection stopped.
+- The stream finds new events by polling the run's JSONL log, not an in-process
+  channel: a run may have been started by a different process, and a channel
+  would never see it.
+- `POST /api/runs` returns 202 with the run id immediately. Runs take minutes;
+  holding the request open would make every disconnect look like a failure.
+- Capability calls run on `spawn_blocking` -- handlers shell out to bd and git,
+  and one slow call on a reactor thread stalls every event stream.
+- Unix socket paths are capped near 104 bytes by the OS. `serve` checks and says
+  so, rather than failing with "path must be shorter than SUN_LEN".
+
 <!-- BEGIN AIOS -->
 ## AIOS
 

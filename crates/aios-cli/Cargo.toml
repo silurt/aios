@@ -25,3 +25,4 @@ aios-runs.workspace = true
 aios-claude.workspace = true
 aios-codex.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
+aios-api.workspace = true

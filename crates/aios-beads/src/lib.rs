@@ -95,7 +95,10 @@ impl IssueTracker for Beads {
         self.query_issues(repo, &["show", id, "--json"])?
             .into_iter()
             .next()
-            .ok_or_else(|| Error::ProjectNotFound(id.to_string()))
+            .ok_or_else(|| Error::NotFound {
+                kind: "issue",
+                id: id.to_string(),
+            })
     }
 
     fn create(&self, repo: &Path, new: &NewIssue) -> Result<Issue> {

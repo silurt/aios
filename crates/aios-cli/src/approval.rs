@@ -39,10 +39,24 @@ pub enum ApprovalCommand {
 }
 
 pub fn run(cmd: ApprovalCommand, json: bool) -> Result<()> {
-    let store = aios_runs::Approvals::open()?;
+    // The gate runs inside a harness process and must work whether or not the
+    // daemon happens to be up, so it keeps its own direct path; everything a
+    // human types goes through the API like any other client.
+    if let ApprovalCommand::Gate = cmd {
+        return crate::gate::run();
+    }
+    let client = crate::client::Client::connect()?;
     match cmd {
+        ApprovalCommand::Gate => unreachable!("handled above"),
         ApprovalCommand::List { all } => {
-            let items = if all { store.all()? } else { store.pending()? };
+            let listed = client.get("/api/approvals")?;
+            let items: Vec<serde_json::Value> = listed
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|a| all || a["state"] == "pending")
+                .collect();
             if json {
                 println!("{}", serde_json::to_string_pretty(&items)?);
                 return Ok(());
@@ -54,36 +68,40 @@ pub fn run(cmd: ApprovalCommand, json: bool) -> Result<()> {
             for a in &items {
                 println!(
                     "{} {} {} {}",
-                    state_badge(a.state),
-                    bold(a.id.as_str()),
-                    bold(&a.tool),
-                    dim(&a.summary)
+                    state_badge(a["state"].as_str().unwrap_or("")),
+                    bold(a["id"].as_str().unwrap_or("")),
+                    bold(a["tool"].as_str().unwrap_or("")),
+                    dim(a["summary"].as_str().unwrap_or(""))
                 );
             }
             Ok(())
         }
         ApprovalCommand::Show { id } => {
-            let a = store.get(&id)?;
+            let a = client.get(&format!("/api/approvals/{id}"))?;
             if json {
                 println!("{}", serde_json::to_string_pretty(&a)?);
                 return Ok(());
             }
             let field = |k: &str, v: &str| println!("{} {v}", dim(&format!("{k:<10}")));
-            println!("{} {}", bold(a.id.as_str()), state_badge(a.state));
-            field("tool", &a.tool);
-            field("run", a.run_id.as_str());
-            field("project", a.project.as_deref().unwrap_or("—"));
-            field("rule", a.rule.as_deref().unwrap_or("—"));
-            field("expires", &a.expires_at.to_string());
-            println!("\n{}", a.summary);
-            if let Some(detail) = &a.detail {
+            let s = |k: &str| a[k].as_str().unwrap_or("—").to_string();
+            println!(
+                "{} {}",
+                bold(&s("id")),
+                state_badge(a["state"].as_str().unwrap_or(""))
+            );
+            field("tool", &s("tool"));
+            field("run", &s("runId"));
+            field("project", &s("project"));
+            field("rule", &s("rule"));
+            field("expires", &s("expiresAt"));
+            println!("\n{}", s("summary"));
+            if let Some(detail) = a["detail"].as_str() {
                 println!("\n{detail}");
             }
             Ok(())
         }
-        ApprovalCommand::Approve { id, reason } => decide(&store, &id, true, reason, json),
-        ApprovalCommand::Deny { id, reason } => decide(&store, &id, false, reason, json),
-        ApprovalCommand::Gate => crate::gate::run(),
+        ApprovalCommand::Approve { id, reason } => decide(&client, &id, true, reason, json),
+        ApprovalCommand::Deny { id, reason } => decide(&client, &id, false, reason, json),
         ApprovalCommand::Policy => {
             let policy = crate::app::policy()?;
             if json {
@@ -109,13 +127,16 @@ pub fn run(cmd: ApprovalCommand, json: bool) -> Result<()> {
 }
 
 fn decide(
-    store: &aios_runs::Approvals,
+    client: &crate::client::Client,
     id: &str,
     approve: bool,
     reason: Option<String>,
     json: bool,
 ) -> Result<()> {
-    let a = store.decide(id, approve, reason.as_deref())?;
+    let a = client.post(
+        &format!("/api/approvals/{id}/decide"),
+        &serde_json::json!({ "approve": approve, "reason": reason }),
+    )?;
     if json {
         println!("{}", serde_json::to_string_pretty(&a)?);
     } else {
@@ -126,20 +147,20 @@ fn decide(
             } else {
                 red("denied")
             },
-            bold(a.id.as_str()),
-            dim(&a.summary)
+            bold(a["id"].as_str().unwrap_or("")),
+            dim(a["summary"].as_str().unwrap_or(""))
         );
     }
     Ok(())
 }
 
-fn state_badge(state: aios_types::ApprovalState) -> String {
-    use aios_types::ApprovalState as S;
+fn state_badge(state: &str) -> String {
     match state {
-        S::Pending => yellow("pending "),
-        S::Approved => green("approved"),
-        S::Denied => red("denied  "),
-        S::Expired => dim("expired "),
+        "pending" => yellow("pending "),
+        "approved" => green("approved"),
+        "denied" => red("denied  "),
+        "expired" => dim("expired "),
+        other => dim(other),
     }
 }
 

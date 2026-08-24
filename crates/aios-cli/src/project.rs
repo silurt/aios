@@ -119,8 +119,9 @@ fn add(
 }
 
 fn list(tag: Option<&str>, json: bool) -> Result<()> {
-    let registry = aios_core::Registry::open()?;
-    let projects = registry.list(tag)?;
+    let client = crate::client::Client::connect()?;
+    let projects = client.call_capability("projects.list", serde_json::json!({ "tag": tag }))?;
+    let projects = projects.as_array().cloned().unwrap_or_default();
     if json {
         println!("{}", serde_json::to_string_pretty(&projects)?);
         return Ok(());
@@ -132,17 +133,29 @@ fn list(tag: Option<&str>, json: bool) -> Result<()> {
         );
         return Ok(());
     }
-    let width = projects.iter().map(|p| p.slug.len()).max().unwrap_or(0);
+    let width = projects
+        .iter()
+        .filter_map(|p| p["slug"].as_str().map(str::len))
+        .max()
+        .unwrap_or(0);
     for p in &projects {
-        let meta = if p.languages.is_empty() {
+        let languages: Vec<&str> = p["languages"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|l| l.as_str()).collect())
+            .unwrap_or_default();
+        let meta = if languages.is_empty() {
             String::new()
         } else {
-            format!(" [{}]", p.languages.join(", "))
+            format!(" [{}]", languages.join(", "))
         };
         println!(
             "{}  {}{}",
-            bold(&format!("{:<width$}", p.slug, width = width)),
-            dim(&tilde(&p.path)),
+            bold(&format!(
+                "{:<width$}",
+                p["slug"].as_str().unwrap_or(""),
+                width = width
+            )),
+            dim(&tilde(p["path"].as_str().unwrap_or(""))),
             dim(&meta),
         );
     }
@@ -150,8 +163,8 @@ fn list(tag: Option<&str>, json: bool) -> Result<()> {
 }
 
 fn show(needle: &str, json: bool) -> Result<()> {
-    let registry = aios_core::Registry::open()?;
-    let p = registry.resolve(needle)?;
+    let client = crate::client::Client::connect()?;
+    let p = client.call_capability("projects.get", serde_json::json!({ "project": needle }))?;
     if json {
         println!("{}", serde_json::to_string_pretty(&p)?);
         return Ok(());
@@ -159,16 +172,28 @@ fn show(needle: &str, json: bool) -> Result<()> {
     // Pad before colouring: ANSI escapes have no width on screen but do in a
     // format specifier, so `{:<16}` over a coloured string mis-aligns.
     let field = |k: &str, v: &str| println!("{} {v}", dim(&format!("{k:<13}")));
-    println!("{}", bold(&p.slug));
-    field("name", &p.name);
-    field("id", p.id.as_str());
-    field("path", &tilde(&p.path));
-    field("remote", p.git_remote.as_deref().unwrap_or("—"));
-    field("branch", p.default_branch.as_deref().unwrap_or("—"));
-    field("languages", &join_or_dash(&p.languages));
-    field("package mgr", p.package_manager.as_deref().unwrap_or("—"));
-    field("issue prefix", p.issue_prefix.as_deref().unwrap_or("—"));
-    field("tags", &join_or_dash(&p.tags));
+    let s = |k: &str| p[k].as_str().unwrap_or("—").to_string();
+    let list = |k: &str| {
+        let items: Vec<&str> = p[k]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        if items.is_empty() {
+            "—".to_string()
+        } else {
+            items.join(", ")
+        }
+    };
+    println!("{}", bold(&s("slug")));
+    field("name", &s("name"));
+    field("id", &s("id"));
+    field("path", &tilde(&s("path")));
+    field("remote", &s("gitRemote"));
+    field("branch", &s("defaultBranch"));
+    field("languages", &list("languages"));
+    field("package mgr", &s("packageManager"));
+    field("issue prefix", &s("issuePrefix"));
+    field("tags", &list("tags"));
     Ok(())
 }
 

@@ -27,6 +27,18 @@ pub struct StartRun {
     pub model: Option<String>,
 }
 
+/// A run that has been recorded but not yet started.
+///
+/// Splitting preparation from execution is what lets the API answer
+/// immediately: the caller gets a run id the moment the run exists, and the
+/// work happens on a detached task it can follow through the event stream.
+pub struct Prepared {
+    pub run: Run,
+    harness: Box<dyn Harness>,
+    args: Vec<String>,
+    cwd: PathBuf,
+}
+
 pub struct Supervisor {
     store: DocStore,
     home: PathBuf,
@@ -65,7 +77,10 @@ impl Supervisor {
     pub fn get(&self, id: &str) -> Result<Run> {
         self.store
             .get::<Run>(COLLECTION, id)?
-            .ok_or_else(|| Error::ProjectNotFound(format!("run {id}")))
+            .ok_or_else(|| Error::NotFound {
+                kind: "run",
+                id: id.to_string(),
+            })
     }
 
     /// All runs, newest first — ULID ids make filename order creation order.
@@ -80,12 +95,8 @@ impl Supervisor {
         self.log(&RunId(id.to_string())).read_since(since, limit)
     }
 
-    /// Run a harness to completion, streaming events as they arrive.
-    ///
-    /// `on_event` is called for every normalized event *after* it is durably
-    /// logged, so a caller rendering live output can never show something that
-    /// would be missing from a replay.
-    pub fn run(&self, start: StartRun, on_event: impl FnMut(&Sequenced<RunEvent>)) -> Result<Run> {
+    /// Record a run and work out how to start it, without starting it.
+    pub fn prepare(&self, start: StartRun) -> Result<Prepared> {
         let spec = RunSpec {
             prompt: start.prompt.clone(),
             cwd: start.cwd.clone(),
@@ -120,7 +131,37 @@ impl Supervisor {
         self.store.put(COLLECTION, run.id.as_str(), &run)?;
 
         let args = start.harness.command(&spec);
-        self.drive(run, start.harness.as_ref(), args, &start.cwd, on_event)
+        Ok(Prepared {
+            run,
+            harness: start.harness,
+            args,
+            cwd: start.cwd,
+        })
+    }
+
+    /// Drive a prepared run to completion.
+    pub fn execute(
+        &self,
+        prepared: Prepared,
+        on_event: impl FnMut(&Sequenced<RunEvent>),
+    ) -> Result<Run> {
+        let Prepared {
+            run,
+            harness,
+            args,
+            cwd,
+        } = prepared;
+        self.drive(run, harness.as_ref(), args, &cwd, on_event)
+    }
+
+    /// Run a harness to completion, streaming events as they arrive.
+    ///
+    /// `on_event` is called for every normalized event *after* it is durably
+    /// logged, so a caller rendering live output can never show something that
+    /// would be missing from a replay.
+    pub fn run(&self, start: StartRun, on_event: impl FnMut(&Sequenced<RunEvent>)) -> Result<Run> {
+        let prepared = self.prepare(start)?;
+        self.execute(prepared, on_event)
     }
 
     /// Continue a parked run through the harness's own session.

@@ -1,9 +1,8 @@
 //! `aios run …` — starting and inspecting runs.
 
 use crate::render::{bold, dim, green, red, yellow};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Subcommand;
-use std::path::PathBuf;
 
 #[derive(Subcommand)]
 pub enum RunCommand {
@@ -64,8 +63,8 @@ pub fn run(cmd: RunCommand, json: bool) -> Result<()> {
     }
 }
 
-fn supervisor() -> Result<aios_runs::Supervisor> {
-    Ok(aios_runs::Supervisor::open(crate::app::policy()?)?)
+fn client() -> Result<crate::client::Client> {
+    crate::client::Client::connect()
 }
 
 fn start(
@@ -76,59 +75,104 @@ fn start(
     stream: bool,
     json: bool,
 ) -> Result<()> {
+    // Parse before talking to the daemon, so a typo is an immediate local
+    // error rather than a round trip.
     let harness_id: aios_types::HarnessId =
         harness.parse().map_err(|e: String| anyhow::anyhow!(e))?;
+    let client = client()?;
 
-    // Resolve the working directory through the registry when a project is
-    // named, so `--project foo` works from anywhere.
-    let registry = aios_core::Registry::open()?;
-    let (cwd, slug) = match &project {
-        Some(needle) => {
-            let p = registry.resolve(needle)?;
-            (PathBuf::from(&p.path), Some(p.slug))
-        }
-        None => {
-            let cwd = std::env::current_dir()?;
-            let slug = registry
-                .resolve(&cwd.display().to_string())
-                .ok()
-                .map(|p| p.slug);
-            (cwd, slug)
-        }
+    let project = match project {
+        Some(p) => Some(p),
+        // Name the current directory explicitly: the daemon has its own working
+        // directory and must not be asked to guess ours.
+        None => std::env::current_dir()
+            .ok()
+            .map(|c| c.display().to_string()),
     };
 
-    let supervisor = supervisor()?;
-    let start = aios_runs::supervisor::StartRun {
-        harness: aios_runs::supervisor::harness_for(harness_id),
-        prompt: task,
-        cwd,
-        project: slug,
-        model,
-    };
+    let started = client.post(
+        "/api/runs",
+        &serde_json::json!({
+            "prompt": task,
+            "project": project,
+            "harness": harness_id,
+            "model": model,
+        }),
+    )?;
+    let id = started["id"].as_str().unwrap_or_default().to_string();
 
     if !json && !stream {
-        println!("{} {}", dim("running"), bold(harness_id.as_str()));
+        println!(
+            "{} {} {}",
+            dim("running"),
+            bold(harness_id.as_str()),
+            dim(&id)
+        );
     }
 
-    let completed = supervisor.run(start, |event| {
-        if stream {
-            // One JSON object per line: the same shape a client reading the
-            // event stream sees, so `--stream | jq` and a UI agree.
-            if let Ok(line) = serde_json::to_string(event) {
-                println!("{line}");
-            }
-        } else if !json {
-            print_event(&event.data);
-        }
+    // The run happens in the daemon; follow it over the resumable stream. A
+    // dropped connection costs nothing — reconnecting replays from the cursor.
+    client.stream(&format!("/api/runs/{id}/stream"), |record| {
+        render_record(&record, stream, json)
+    })?;
+
+    let finished = client.get(&format!("/api/runs/{id}"))?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&finished)?);
+    }
+    Ok(())
+}
+
+fn resume(needle: &str, task: Option<&str>, stream: bool, json: bool) -> Result<()> {
+    let client = client()?;
+    let existing = client.get(&format!("/api/runs/{needle}"))?;
+    let id = existing["id"].as_str().unwrap_or(needle).to_string();
+    let since = existing["lastSeq"].as_u64().unwrap_or(0);
+
+    if !json && !stream {
+        println!(
+            "{} {} {}",
+            dim("resuming"),
+            bold(&id),
+            dim(&format!("from event {since}"))
+        );
+    }
+
+    client.post(
+        &format!("/api/runs/{id}/resume"),
+        &serde_json::json!({ "task": task }),
+    )?;
+
+    // Resume from where the run left off, so the transcript is not replayed.
+    client.stream(&format!("/api/runs/{id}/stream?since={since}"), |record| {
+        render_record(&record, stream, json)
     })?;
 
     if json {
-        println!("{}", serde_json::to_string_pretty(&completed)?);
-    } else if !stream {
-        println!();
-        println!("{} {}", dim("run"), bold(completed.id.as_str()));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&client.get(&format!("/api/runs/{id}"))?)?
+        );
     }
     Ok(())
+}
+
+/// How a streamed record is shown.
+///
+/// `--stream` prints the record verbatim — the same shape a client reading the
+/// event stream sees, so `--stream | jq` and a UI agree. Otherwise it is
+/// rendered for a human, unless `--json` is asking for the final run object
+/// only.
+fn render_record(record: &serde_json::Value, stream: bool, json: bool) {
+    if stream {
+        if let Ok(line) = serde_json::to_string(record) {
+            println!("{line}");
+        }
+    } else if !json
+        && let Ok(event) = serde_json::from_value::<aios_types::RunEvent>(record["data"].clone())
+    {
+        print_event(&event);
+    }
 }
 
 fn print_event(event: &aios_types::RunEvent) {
@@ -172,37 +216,15 @@ fn print_event(event: &aios_types::RunEvent) {
     }
 }
 
-fn resume(needle: &str, task: Option<&str>, stream: bool, json: bool) -> Result<()> {
-    let supervisor = supervisor()?;
-    let existing = supervisor.get(needle)?;
-
-    if !json && !stream {
-        println!(
-            "{} {} {}",
-            dim("resuming"),
-            bold(existing.id.as_str()),
-            dim(&format!("from event {}", existing.last_seq))
-        );
-    }
-
-    let completed = supervisor.resume(existing.id.as_str(), task, |event| {
-        if stream {
-            if let Ok(line) = serde_json::to_string(event) {
-                println!("{line}");
-            }
-        } else if !json {
-            print_event(&event.data);
-        }
-    })?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&completed)?);
-    }
-    Ok(())
-}
-
 fn list(limit: usize, json: bool) -> Result<()> {
-    let runs: Vec<_> = supervisor()?.all()?.into_iter().take(limit).collect();
+    let listed = client()?.get("/api/runs")?;
+    let runs: Vec<serde_json::Value> = listed
+        .as_array()
+        .cloned()
+        .unwrap_or_default()
+        .into_iter()
+        .take(limit)
+        .collect();
     if json {
         println!("{}", serde_json::to_string_pretty(&runs)?);
         return Ok(());
@@ -214,65 +236,74 @@ fn list(limit: usize, json: bool) -> Result<()> {
     for r in &runs {
         println!(
             "{} {} {} {}",
-            status_badge(r.status),
-            bold(r.id.as_str()),
-            dim(r.harness.as_str()),
-            truncate(&r.prompt, 60)
+            status_badge_str(r["status"].as_str().unwrap_or("")),
+            bold(r["id"].as_str().unwrap_or("")),
+            dim(r["harness"].as_str().unwrap_or("")),
+            truncate(r["prompt"].as_str().unwrap_or(""), 60)
         );
     }
     Ok(())
 }
 
-fn status_badge(status: aios_types::RunStatus) -> String {
-    use aios_types::RunStatus as S;
+/// Render a status from the wire form. The CLI reads runs as JSON now, so it
+/// branches on the serialized name rather than the enum.
+fn status_badge_str(status: &str) -> String {
     match status {
-        S::Running => yellow("running "),
-        S::AwaitingApproval => yellow("approval"),
-        S::Parked => yellow("parked  "),
-        S::Succeeded => green("done    "),
-        S::Failed => red("failed  "),
-        S::Interrupted => dim("stopped "),
+        "running" => yellow("running "),
+        "awaitingApproval" => yellow("approval"),
+        "parked" => yellow("parked  "),
+        "succeeded" => green("done    "),
+        "failed" => red("failed  "),
+        "interrupted" => dim("stopped "),
+        other => dim(other),
     }
 }
 
 fn show(needle: &str, json: bool) -> Result<()> {
-    let run = supervisor()?.get(needle)?;
+    let run = client()?.get(&format!("/api/runs/{needle}"))?;
     if json {
         println!("{}", serde_json::to_string_pretty(&run)?);
         return Ok(());
     }
     let field = |k: &str, v: &str| println!("{} {v}", dim(&format!("{k:<12}")));
-    println!("{} {}", bold(run.id.as_str()), status_badge(run.status));
-    field("harness", run.harness.as_str());
-    field("project", run.project.as_deref().unwrap_or("—"));
-    field("cwd", &run.cwd);
-    field("model", run.model.as_deref().unwrap_or("—"));
-    field("session", run.session_ref.as_deref().unwrap_or("—"));
-    field("events", &run.last_seq.to_string());
-    if let Some(cost) = run.cost_usd {
+    let s = |k: &str| run[k].as_str().unwrap_or("—").to_string();
+    println!(
+        "{} {}",
+        bold(&s("id")),
+        status_badge_str(run["status"].as_str().unwrap_or(""))
+    );
+    field("harness", &s("harness"));
+    field("project", &s("project"));
+    field("cwd", &s("cwd"));
+    field("model", &s("model"));
+    field("session", &s("sessionRef"));
+    field("events", &run["lastSeq"].to_string());
+    if let Some(cost) = run["costUsd"].as_f64() {
         field("cost", &format!("${cost:.4}"));
     }
-    if let Some(error) = &run.error {
+    if let Some(error) = run["error"].as_str() {
         field("error", error);
     }
-    println!("\n{}", run.prompt);
+    println!("\n{}", s("prompt"));
     Ok(())
 }
 
 fn events(needle: &str, since: u64, json: bool) -> Result<()> {
-    let supervisor = supervisor()?;
-    let run = supervisor.get(needle)?;
-    let events = supervisor
-        .events(run.id.as_str(), since, 10_000)
-        .with_context(|| format!("reading events for {}", run.id))?;
-
+    let client = client()?;
+    let records = client.get(&format!("/api/runs/{needle}/events?since={since}"))?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&events)?);
+        println!("{}", serde_json::to_string_pretty(&records)?);
         return Ok(());
     }
-    for event in &events {
-        print!("{} ", dim(&format!("{:>4}", event.seq)));
-        print_event(&event.data);
+    for record in records.as_array().cloned().unwrap_or_default() {
+        print!("{} ", dim(&format!("{:>4}", record["seq"])));
+        match serde_json::from_value::<aios_types::RunEvent>(record["data"].clone()) {
+            Ok(event) => print_event(&event),
+            // A record this build cannot interpret is shown rather than
+            // dropped — the store already skips version mismatches, and
+            // silently printing nothing would look like an empty transcript.
+            Err(_) => println!("{}", dim("(unreadable event)")),
+        }
     }
     Ok(())
 }

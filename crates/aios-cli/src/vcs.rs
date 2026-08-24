@@ -22,15 +22,14 @@ pub enum VcsCommand {
 }
 
 pub fn run(cmd: VcsCommand, json_out: bool) -> Result<()> {
-    let caps = crate::app::capabilities();
-    let ctx = crate::app::context()?;
+    let client = crate::client::Client::connect()?;
     let (name, input) = match &cmd {
         VcsCommand::Status { project } => ("vcs.status", json!({ "project": project })),
         VcsCommand::Log { project, limit } => {
             ("vcs.log", json!({ "project": project, "limit": limit }))
         }
     };
-    let result = caps.call(&ctx, name, input)?;
+    let result = client.call_capability(name, input)?;
     if json_out {
         println!("{}", serde_json::to_string_pretty(&result)?);
         return Ok(());
