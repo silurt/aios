@@ -164,6 +164,27 @@ adding a capability adds a tool for Claude and Codex simultaneously.
 - Capability handlers are blocking (they shell out). Anything calling them from
   async must use `spawn_blocking`.
 
+## Storage
+
+No SQL engine. Two primitives in `aios-core::store`, both plain JSON:
+
+- `DocStore` -- one JSON file per document, for small config-shaped data read
+  often and written rarely (the project registry). Writes are temp file ->
+  fsync -> rename, so a reader never sees a half-written file.
+- `AppendLog` -- newline-delimited JSON with monotonic sequences and `since`
+  replay, for high-volume append-only streams (run events).
+
+Rules:
+
+- Store the wire type directly. Never hand-write a mapping layer between stored
+  and wire representations -- that is the drift `docs/plan.md` section 16 exists
+  to prevent.
+- Document ids become filenames and come from user and agent input; they are
+  constrained to `[A-Za-z0-9._-]` by the store. Do not bypass that check.
+- Wrap check-then-write sequences in `DocStore::with_lock`.
+- Never delete a user's data to tidy up. Report it (see `aios doctor` and the
+  legacy `state.db` note) and let them decide.
+
 <!-- BEGIN AIOS -->
 ## AIOS
 

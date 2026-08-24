@@ -11,7 +11,7 @@
 
 | # | Decision | Choice | Rationale |
 | - | -------- | ------ | --------- |
-| 1 | Core language | **Rust** — one static binary, `axum` + `tokio` + `rusqlite` | Supersedes an earlier TypeScript decision. The single-binary + system-access requirement (§3.1) is native in Rust and awkward in Node; Rust + Swift is a coherent two-language story where TS in the middle would have been a third language destined for rewrite. Performance is *not* the reason — the daemon is I/O-bound on model calls. |
+| 1 | Core language | **Rust** — one static binary, `axum` + `tokio`, no embedded SQL engine | Supersedes an earlier TypeScript decision. The single-binary + system-access requirement (§3.1) is native in Rust and awkward in Node; Rust + Swift is a coherent two-language story where TS in the middle would have been a third language destined for rewrite. Performance is *not* the reason — the daemon is I/O-bound on model calls. |
 | 2 | Issue storage | **Per-project `.beads/`, with the JSONL export committed** | Harnesses see issues natively in-repo; worktrees stay coherent. Cross-project view via `bd repo` + federation. Note the correction in §6.1: the Dolt DB itself is gitignored by beads, so `issues.jsonl` is what actually travels with the repo. |
 | 3 | Vault | **`~/vault`, its own git repo** | Independent history, syncs on its own, swappable via config, openable in Obsidian without code noise. |
 | 4 | Channels | **Deferred** | Nothing in phases 0–3 depends on it. Revisit after the run supervisor is real. See §8 for the investigation already done. |
@@ -19,9 +19,10 @@
 | 6 | Transport | **Direct device-to-device** — mDNS on LAN, Tailscale P2P off-LAN. No relay. | No server we run sits between daemon and app, and none that anyone runs can read the traffic. §13.1 |
 | 7 | Push | **None** | No custody of push tokens or an APNs key until the app warrants securing them. Removes the last third party from the data path; forces approvals to be policy-driven rather than interrupt-driven, which is better anyway. §13.3 |
 | 8 | Process model | **One binary, three modes** — `aios serve` (daemon), `aios <cmd>` (CLI client), managed LaunchAgent | Same executable however it is started; the Mac app installs and supervises it, but never owns it. §3.1 |
-| 11 | Type & version contract | **`crates/aios-types` is the single definition**; OpenAPI, Swift and TS are derived. Separate monotonic `apiVersion`, negotiated per request. | The compiler blocks untyped API surface, a staleness gate blocks unregenerated specs, and `oasdiff` decides version bumps mechanically — so incompatible builds cannot ship quietly, and skew is reported precisely in both directions. §15 |
-| 10 | Repo shape | **One polyglot monorepo** — Rust crates, Apple apps, TS client, docs, issues | The OpenAPI spec is a seam *inside* the repo, so a capability change and every client that consumes it land in one commit. Split repos would make each schema change a multi-repo dance with version pinning. §11.1 |
 | 9 | Client tiers | **Binary → desktop → mobile**, always and per feature. macOS/iOS are the first implementations of the two client roles. Next.js web UI dropped. | Clients hold presentation only; the CLI being complete is what keeps them honest. Two SwiftUI targets over one shared `AIOSKit` also costs far less than a React admin *and* a SwiftUI admin. §1.1, §14 |
+| 10 | Repo shape | **One polyglot monorepo** — Rust crates, Apple apps, TS client, docs, issues | The OpenAPI spec is a seam *inside* the repo, so a capability change and every client that consumes it land in one commit. Split repos would make each schema change a multi-repo dance with version pinning. §11.1 |
+| 11 | Type & version contract | **`crates/aios-types` is the single definition**; OpenAPI, Swift and TS are derived. Separate monotonic `apiVersion`, negotiated per request. | The compiler blocks untyped API surface, a staleness gate blocks unregenerated specs, and `oasdiff` decides version bumps mechanically — so incompatible builds cannot ship quietly, and skew is reported precisely in both directions. §15 |
+| 12 | Storage | **JSON documents + JSONL append logs**, no SQLite | The stored form becomes the same serde type as the wire form, removing a hand-written row-mapping layer that could drift from it; drops a bundled C dependency; and makes `~/.aios` readable and agent-editable, consistent with the vault being markdown. §16 |
 
 
 ---
@@ -140,7 +141,7 @@ all get it simultaneously.
 │  │ projects,  │ │  issues/kb/  │ │ supervisor│ │  router      │  │
 │  │ agents     │ │  vcs/memory  │ │ +approvals│ │  (deferred)  │  │
 │  └────────────┘ └──────────────┘ └───────────┘ └──────────────┘  │
-│  state: SQLite (~/.aios/state.db)   bus: cursor-addressed events │
+│  state: JSON docs + JSONL logs      bus: cursor-addressed events │
 │  surfaces:  UDS ~/.aios/aiosd.sock   ·   TCP+TLS (LAN, tailnet)  │
 │             MCP (stdio + streamable HTTP)                        │
 └──┬────────────┬──────────────┬──────────────┬────────────────────┘
@@ -223,15 +224,16 @@ State lives in `~/.aios/`:
 ```
 ~/.aios/
   config.toml        vault path, daemon port, defaults
-  state.db           projects, sessions, runs, messages, channel identities
+  projects/*.json    one document per registered project
+  runs/<id>/events.jsonl   append-only, monotonic, `since`-replayable
   agents/*.md        agent profiles (frontmatter + system prompt)
   runs/<id>/         transcripts, logs, artifacts
   logs/
 ```
 
 Everything durable that benefits from history (vault, per-project `.beads/`) is
-git-tracked in its own repo. `state.db` is ephemeral-ish operational state and is
-backed up, not versioned.
+git-tracked in its own repo. `~/.aios` is operational state — backed up, not
+versioned.
 
 ## 5. Knowledge model
 
@@ -446,7 +448,7 @@ a phone number, so:
 
 | Phase | Deliverable | Proves |
 | ----- | ----------- | ------ |
-| 0 | Cargo workspace, `aios` binary, SQLite registry, `project add/list/show` | the registry shape |
+| 0 | Cargo workspace, `aios` binary, document-store registry, `project add/list/show` | the registry shape |
 | 1 | capability registry + port traits + beads/obsidian/git adapters, CLI-exposed | ports & schemas hold up |
 | 2 | MCP server (stdio) + per-project config generation | claude *and* codex see identical tools |
 | 3 | run supervisor + **approvals with policy** (§7.1), normalized events, transcripts | the harness abstraction, and graceful degradation when nobody answers |
@@ -498,8 +500,8 @@ aios/
   docs/
 ```
 
-**Core stack:** `tokio`, `axum` (UDS and TLS from one router), `rusqlite` +
-`refinery` for state and migrations, `serde` throughout, `utoipa` for the OpenAPI
+**Core stack:** `tokio`, `axum` (UDS and TLS from one router), JSON documents
+and JSONL logs for state (§16 — no embedded SQL engine), `serde` throughout, `utoipa` for the OpenAPI
 document, `clap` (derive) for the CLI, `rmcp` for MCP, `tracing` for logs,
 `mdns-sd` for LAN advertisement, `portable-pty` only if an interactive TTY is
 genuinely needed — headless harness modes are JSON over pipes and need none.
@@ -1036,3 +1038,74 @@ iOS. Per §1.1 the *rule* lives in the daemon and the *rendering* in the client.
 The daemon also serves the live `/openapi.json`, so a mismatch can always be
 diagnosed against the running instance rather than against a build artifact someone
 has to go find.
+
+---
+
+## 16. Storage — JSON documents, not SQL
+
+Two primitives, both plain JSON, cover everything AIOS stores.
+
+**`DocStore` — one JSON file per document.** For configuration-shaped data that
+is small, read often, written rarely, and worth being able to read with `cat`:
+the project registry today, agent profiles later.
+
+**`AppendLog` — newline-delimited JSON.** For high-volume append-only streams
+with monotonic sequence numbers and `since` replay: run events (§13.2), session
+transcripts later.
+
+### 16.1 Why not SQLite
+
+Three reasons, none of them fashion:
+
+1. **It collapses a serialization layer.** The SQL version hand-mapped every
+   column in a `row_to_project` function — a second representation of `Project`
+   that could drift from the `serde` one. As a document, `Project` *is* the
+   stored form, which extends §15's one-definition rule to storage.
+2. **It drops a bundled C dependency.** `rusqlite` compiles SQLite. Removing it
+   makes the single-static-binary goal and any future cross-compilation
+   strictly easier.
+3. **`~/.aios` becomes inspectable and agent-editable** — consistent with the
+   vault being plain markdown and issues living in beads. For a system whose
+   premise is agents operating your tools, a store you can `cat` is on-brand.
+
+### 16.2 What we gave up, and why it is affordable
+
+| Lost | Why it does not bite |
+| ---- | -------------------- |
+| Multi-document transactions | The daemon is the single writer by design (§3), and every operation touches one document. |
+| Referential integrity | Tags moved *into* the project document. The join table and its cascade were relational-modelling overhead the document model removes. |
+| Indexed queries | The registry is tens of documents. A full scan costs less than the syscalls to consult an index. Revisit only if it reaches thousands. |
+| `PRAGMA user_version` migrations | Replaced by a per-document `schemaVersion` in an envelope, which upcasts on read — finer-grained, and per-collection rather than global. |
+
+### 16.3 What we did **not** give up
+
+**Durability.** Document writes go temp file → `fsync` → `rename`. `rename(2)` is
+atomic on POSIX, so a reader sees the old document or the new one, never a
+truncated file. Without the fsync the rename can land before the data does,
+turning a power loss into an empty document.
+
+**Crash tolerance in the log.** Appends are fsynced, and the shape a power loss
+leaves — a partially written trailing line — is one unparseable line rather than
+a corrupt file. Reads skip it; the next append does not reuse its sequence
+number. Refusing to serve an entire history because the last record was cut
+short would turn a recoverable crash into an unusable log.
+
+**Safety against hostile ids.** Document ids become filenames and arrive from
+user and agent input, so they are constrained to `[A-Za-z0-9._-]`. A slug like
+`../../etc/passwd` cannot place a file outside the store.
+
+**Concurrency.** Mutations run under an advisory exclusive lock
+(`std::fs::File::lock`, stable since Rust 1.89 — no dependency), because
+check-then-write sequences are otherwise racy between two `aios` invocations.
+
+### 16.4 The event log is the load-bearing case
+
+A directory of JSON files would be genuinely bad at run events: every append
+rewriting a file, or thousands of files with `since` degenerating into a
+directory scan. JSONL solves it the way the surrounding ecosystem already does —
+beads writes `issues.jsonl`, coding harnesses write JSONL transcripts. Appends
+are O(1) with no rewrite, ordering is inherent, `tail -f` works, and the §13.2
+replay cursor is a filter on a monotonic field.
+
+This is the case a relational store would have won, so it is the one the
+decision had to answer rather than sidestep.
