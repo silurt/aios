@@ -1,0 +1,58 @@
+//! Port traits.
+//!
+//! Each port is the *neutral* interface to a class of tool (plan §2). The
+//! adapter behind it is replaceable; the trait is what the capability registry,
+//! the CLI, the MCP server, and every client depend on.
+//!
+//! Ports are stateless with respect to *which* project they act on: the repo
+//! path is an argument rather than constructor state. That keeps a single
+//! adapter instance usable across every registered project, which matters once
+//! the daemon serves concurrent runs against different repos.
+
+use aios_core::Result;
+use aios_types::{
+    Commit, Issue, IssueQuery, NewIssue, Note, NoteHit, NoteRef, RepoStatus, Scope, WriteNote,
+};
+use std::path::Path;
+
+/// Issue tracking. First implementation: beads.
+pub trait IssueTracker: Send + Sync {
+    /// Name of the backing tool, for diagnostics and error messages.
+    fn backend(&self) -> &'static str;
+
+    /// Whether this repo has a tracker at all. Checked before every operation
+    /// so the failure is "this project has no tracker" rather than whatever the
+    /// underlying tool prints when it cannot find its database.
+    fn available(&self, repo: &Path) -> bool;
+
+    fn list(&self, repo: &Path, query: &IssueQuery) -> Result<Vec<Issue>>;
+
+    /// Issues with no unmet dependencies — work that can start now.
+    ///
+    /// This is the operation that justifies beads over a flat tracker, and it
+    /// is why the port has it as a first-class method rather than leaving
+    /// callers to reconstruct it from a dependency graph.
+    fn ready(&self, repo: &Path) -> Result<Vec<Issue>>;
+
+    fn get(&self, repo: &Path, id: &str) -> Result<Issue>;
+    fn create(&self, repo: &Path, new: &NewIssue) -> Result<Issue>;
+    fn close(&self, repo: &Path, id: &str, reason: Option<&str>) -> Result<Issue>;
+}
+
+/// Knowledge base. First implementation: an Obsidian vault.
+pub trait Knowledge: Send + Sync {
+    fn backend(&self) -> &'static str;
+    fn available(&self) -> bool;
+
+    fn list(&self, scope: &Scope) -> Result<Vec<NoteRef>>;
+    fn search(&self, scope: &Scope, query: &str, limit: usize) -> Result<Vec<NoteHit>>;
+    fn read(&self, path: &str) -> Result<Note>;
+    fn write(&self, req: &WriteNote) -> Result<Note>;
+}
+
+/// Version control. First (and for now only) implementation: git.
+pub trait Vcs: Send + Sync {
+    fn backend(&self) -> &'static str;
+    fn status(&self, repo: &Path) -> Result<RepoStatus>;
+    fn log(&self, repo: &Path, limit: usize) -> Result<Vec<Commit>>;
+}

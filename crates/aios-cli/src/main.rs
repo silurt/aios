@@ -5,8 +5,13 @@
 //! become API calls over the Unix socket, which is why they are kept thin and
 //! do no work beyond argument handling and rendering.
 
+mod app;
+mod cap;
+mod issue;
+mod kb;
 mod project;
 mod render;
+mod vcs;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -35,6 +40,22 @@ enum Command {
     #[command(subcommand, visible_alias = "p")]
     Project(project::ProjectCommand),
 
+    /// Issue tracking
+    #[command(subcommand, visible_alias = "i")]
+    Issue(issue::IssueCommand),
+
+    /// Knowledge base
+    #[command(subcommand)]
+    Kb(kb::KbCommand),
+
+    /// Version control
+    #[command(subcommand)]
+    Vcs(vcs::VcsCommand),
+
+    /// Inspect and invoke capabilities directly
+    #[command(subcommand)]
+    Cap(cap::CapCommand),
+
     /// Check that the local installation is healthy
     Doctor,
 
@@ -61,6 +82,10 @@ fn main() -> std::process::ExitCode {
 fn run(command: Command, json: bool) -> Result<()> {
     match command {
         Command::Project(cmd) => project::run(cmd, json),
+        Command::Issue(cmd) => issue::run(cmd, json),
+        Command::Kb(cmd) => kb::run(cmd, json),
+        Command::Vcs(cmd) => vcs::run(cmd, json),
+        Command::Cap(cmd) => cap::run(cmd, json),
         Command::Doctor => doctor(json),
         Command::Version => version(json),
     }

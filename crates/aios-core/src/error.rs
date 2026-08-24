@@ -32,6 +32,21 @@ pub enum Error {
 
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+
+    #[error("{tool} is not installed or not on PATH")]
+    ToolMissing { tool: String },
+
+    #[error("{tool} failed: {message}")]
+    ToolFailed { tool: String, message: String },
+
+    #[error("no capability named {0:?}")]
+    CapabilityNotFound(String),
+
+    #[error("{0} has no issue tracker; run `bd init` in it first")]
+    NoIssueTracker(String),
+
+    #[error("vault {0} does not exist; set `vault` in ~/.aios/config.toml")]
+    NoVault(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -42,6 +57,10 @@ impl Error {
             Error::ProjectNotFound(_) => ErrorKind::NotFound,
             Error::PathAlreadyRegistered { .. } | Error::SlugTaken(_) => ErrorKind::AlreadyExists,
             Error::Invalid(_) | Error::NotADirectory(_) => ErrorKind::InvalidArgument,
+            Error::CapabilityNotFound(_) => ErrorKind::NotFound,
+            Error::ToolMissing { .. } | Error::NoIssueTracker(_) | Error::NoVault(_) => {
+                ErrorKind::FailedPrecondition
+            }
             _ => ErrorKind::Internal,
         }
     }

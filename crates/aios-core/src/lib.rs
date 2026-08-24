@@ -13,5 +13,20 @@ pub mod error;
 pub mod registry;
 
 pub use config::Config;
+
+/// Today's date as `YYYY-MM-DD`, in local time.
+///
+/// Local rather than UTC deliberately: this names daily notes and inbox files,
+/// and a note filed at 1am should carry the date the person filing it would
+/// say out loud.
+pub fn today() -> String {
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        now.month() as u8,
+        now.day()
+    )
+}
 pub use error::{Error, Result};
 pub use registry::Registry;

@@ -3,10 +3,35 @@
 version = 4
 
 [[package]]
-name = "aios-cli"
+name = "aios-beads"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-core",
+ "aios-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aios-caps"
 version = "0.1.0"
 dependencies = [
  "aios-core",
+ "aios-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "aios-cli"
+version = "0.1.0"
+dependencies = [
+ "aios-beads",
+ "aios-caps",
+ "aios-core",
+ "aios-git",
+ "aios-obsidian",
  "aios-types",
  "anyhow",
  "clap",
@@ -27,6 +52,27 @@ dependencies = [
  "time",
  "toml",
  "ulid",
+]
+
+[[package]]
+name = "aios-git"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-core",
+ "aios-types",
+ "serde_json",
+]
+
+[[package]]
+name = "aios-obsidian"
+version = "0.1.0"
+dependencies = [
+ "aios-caps",
+ "aios-core",
+ "aios-types",
+ "serde_json",
+ "time",
 ]
 
 [[package]]
@@ -402,6 +448,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521739c6d2bac4aa25192232afe6841231376b2b26d4d9fae5ecf8ca5772e441"
 
 [[package]]
+name = "num_threads"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c7398b9c8b70908f6371f47ed36737907c87c52af34c268fed0bf0ceb92ead9"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -659,7 +714,9 @@ checksum = "cdb87b95ec50ddfa440816d227a17b2ccbdda963a316a727fda0fc4334f7d134"
 dependencies = [
  "deranged",
  "js-sys",
+ "libc",
  "num-conv",
+ "num_threads",
  "powerfmt",
  "serde_core",
  "time-core",

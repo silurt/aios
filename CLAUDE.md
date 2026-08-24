@@ -129,3 +129,23 @@ nowhere else.** OpenAPI, Swift and TypeScript models are all derived from it. Se
   being stale is a CI and pre-commit failure.
 - Changing the spec requires bumping `apiVersion`; a *breaking* change also raises
   `minClientApi`. CI classifies which via `oasdiff` and fails if the bump is missing.
+
+## Capabilities
+
+A capability is registered once in `crates/aios-caps/src/caps/` and is thereby
+callable from the CLI, MCP, and REST. Adding one means:
+
+1. Put its input/output types in `aios-types` (never inline in the handler).
+2. Register it in the relevant `caps/*.rs` `register()` function with a
+   `group.operation` name, a summary, and the correct `Effect`.
+3. `Effect::Write` is not decoration: it drives MCP annotations, read-only agent
+   profiles, and (from phase 3) whether a call requires an approval. A
+   misclassification is a security bug.
+
+Handlers must go through a port trait (`IssueTracker`, `Knowledge`, `Vcs`), never
+call a tool directly. The composition root that binds ports to concrete adapters
+is `crates/aios-cli/src/app.rs` -- the only place that names beads, Obsidian, or
+git.
+
+CLI commands call `Capabilities::call(...)` by name rather than the ports, so the
+CLI exercises the same path MCP and REST will take.

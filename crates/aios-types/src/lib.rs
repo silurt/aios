@@ -21,10 +21,16 @@ use time::OffsetDateTime;
 use utoipa::ToSchema;
 
 pub mod ids;
+pub mod issue;
+pub mod knowledge;
 pub mod project;
+pub mod vcs;
 
 pub use ids::ProjectId;
+pub use issue::{Issue, IssueQuery, IssueStatus, NewIssue};
+pub use knowledge::{Note, NoteHit, NoteRef, Scope, WriteNote};
 pub use project::{NewProject, Project, ProjectDetection, ProjectSummary};
+pub use vcs::{Commit, FileChange, RepoStatus};
 
 /// Wire-format timestamp. Always serialized as RFC 3339.
 pub type Timestamp = OffsetDateTime;

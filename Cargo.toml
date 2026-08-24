@@ -1,6 +1,14 @@
 [workspace]
 resolver = "3"
-members = ["crates/aios-types", "crates/aios-core", "crates/aios-cli"]
+members = [
+    "crates/aios-types",
+    "crates/aios-core",
+    "crates/aios-caps",
+    "crates/aios-beads",
+    "crates/aios-obsidian",
+    "crates/aios-git",
+    "crates/aios-cli",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +20,10 @@ repository = "https://github.com/silurt/aios"
 [workspace.dependencies]
 aios-types = { path = "crates/aios-types" }
 aios-core = { path = "crates/aios-core" }
+aios-caps = { path = "crates/aios-caps" }
+aios-beads = { path = "crates/aios-beads" }
+aios-obsidian = { path = "crates/aios-obsidian" }
+aios-git = { path = "crates/aios-git" }
 
 [profile.release]
 opt-level = 3
