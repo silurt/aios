@@ -7,7 +7,6 @@
 //! permanent by accident.
 
 pub mod config;
-pub mod db;
 pub mod detect;
 pub mod error;
 pub mod managed;

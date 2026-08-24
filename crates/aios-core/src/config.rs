@@ -15,7 +15,14 @@ pub fn home() -> PathBuf {
         .join(".aios")
 }
 
-pub fn state_db_path() -> PathBuf {
+/// Where the project registry's documents live.
+pub fn projects_dir() -> PathBuf {
+    home().join("projects")
+}
+
+/// A store left behind by a build that used SQLite. Reported by `doctor` so it
+/// can be removed deliberately rather than deleted behind the user's back.
+pub fn legacy_sqlite_path() -> PathBuf {
     home().join("state.db")
 }
 
@@ -64,8 +71,8 @@ impl Config {
     }
 }
 
-/// Create `~/.aios` if absent. Mode 0700: the Unix socket and state database
-/// live here, and same-machine access is authenticated by filesystem
+/// Create `~/.aios` if absent. Mode 0700: the Unix socket and every stored
+/// document live here, and same-machine access is authenticated by filesystem
 /// permissions alone (plan §3.2).
 pub fn ensure_home() -> Result<PathBuf> {
     let dir = home();

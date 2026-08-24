@@ -120,9 +120,9 @@ fn doctor(json: bool) -> Result<()> {
     let checks = vec![
         ("aios home", home.display().to_string(), home.exists()),
         (
-            "state database",
-            config::state_db_path().display().to_string(),
-            config::state_db_path().exists(),
+            "projects",
+            config::projects_dir().display().to_string(),
+            config::projects_dir().exists(),
         ),
         ("vault", cfg.vault.display().to_string(), cfg.vault.exists()),
         (
@@ -162,6 +162,16 @@ fn doctor(json: bool) -> Result<()> {
             }))?
         );
         return Ok(());
+    }
+
+    // Flag, do not delete: removing someone's data behind their back is worse
+    // than a line of output they can act on.
+    if config::legacy_sqlite_path().exists() {
+        println!(
+            "{} unused {} left by an older build — safe to delete",
+            render::yellow("note"),
+            render::dim(&config::legacy_sqlite_path().display().to_string())
+        );
     }
 
     for (name, detail, ok) in &checks {

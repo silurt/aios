@@ -18,9 +18,6 @@ pub enum Error {
     NotADirectory(String),
 
     #[error(transparent)]
-    Sqlite(#[from] rusqlite::Error),
-
-    #[error(transparent)]
     Io(#[from] std::io::Error),
 
     #[error("config at {path}: {source}")]

@@ -4,8 +4,13 @@
 use aios_core::{Registry, detect};
 use aios_types::NewProject;
 
-fn registry() -> Registry {
-    Registry::from_conn(aios_core::db::open_in_memory().unwrap())
+/// A registry rooted in a scratch directory, so the suite never touches the
+/// real `~/.aios`.
+fn registry(name: &str) -> Registry {
+    let root = std::env::temp_dir().join(format!("aios-reg-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    Registry::at(root)
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
@@ -16,7 +21,7 @@ fn temp_dir(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn adds_and_resolves_by_slug_id_and_path() {
-    let reg = registry();
+    let reg = registry("resolve");
     let dir = temp_dir("resolve");
     let p = reg
         .add(NewProject {
@@ -32,7 +37,7 @@ fn adds_and_resolves_by_slug_id_and_path() {
 
 #[test]
 fn rejects_the_same_directory_twice() {
-    let reg = registry();
+    let reg = registry("dupe");
     let dir = temp_dir("dupe");
     let req = || NewProject {
         path: dir.display().to_string(),
@@ -49,7 +54,7 @@ fn rejects_the_same_directory_twice() {
 
 #[test]
 fn canonicalizes_so_equivalent_paths_are_one_project() {
-    let reg = registry();
+    let reg = registry("canon");
     let dir = temp_dir("canon");
     reg.add(NewProject {
         path: dir.display().to_string(),
@@ -73,7 +78,7 @@ fn canonicalizes_so_equivalent_paths_are_one_project() {
 
 #[test]
 fn rejects_a_slug_that_is_not_slug_shaped() {
-    let reg = registry();
+    let reg = registry("badslug");
     let dir = temp_dir("badslug");
     let err = reg
         .add(NewProject {
@@ -87,7 +92,7 @@ fn rejects_a_slug_that_is_not_slug_shaped() {
 
 #[test]
 fn lists_filtered_by_tag() {
-    let reg = registry();
+    let reg = registry("tags");
     let a = temp_dir("tag-a");
     let b = temp_dir("tag-b");
     reg.add(NewProject {
@@ -110,8 +115,8 @@ fn lists_filtered_by_tag() {
 }
 
 #[test]
-fn removing_a_project_cascades_its_tags() {
-    let reg = registry();
+fn removing_a_project_frees_its_slug() {
+    let reg = registry("cascade");
     let dir = temp_dir("cascade");
     let p = reg
         .add(NewProject {

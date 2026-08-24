@@ -129,7 +129,11 @@ impl Vcs for NoVcs {
 fn context() -> Context {
     Context::new(
         aios_core::Config::default(),
-        aios_core::Registry::from_conn(aios_core::db::open_in_memory().unwrap()),
+        aios_core::Registry::at({
+            let root = std::env::temp_dir().join(format!("aios-caps-test-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            root
+        }),
         Ports {
             issues: Box::new(FakeTracker::new()),
             knowledge: Box::new(NoKnowledge),
