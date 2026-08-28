@@ -6,6 +6,6 @@ pub mod context;
 pub mod ports;
 pub mod registry;
 
-pub use context::{Context, Ports};
+pub use context::{Context, NoRunControl, Ports, RunControl};
 pub use ports::{IssueTracker, Knowledge, Vcs};
 pub use registry::{Capabilities, Capability, Effect};

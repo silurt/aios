@@ -18,6 +18,25 @@ pub struct Context {
     pub config: Config,
     pub registry: Registry,
     pub ports: Ports,
+    /// Run control. Behind a trait so `aios-caps` does not depend on
+    /// `aios-runs`, which depends on it — the same acyclicity the ports exist
+    /// to preserve.
+    pub runs: Box<dyn RunControl>,
+}
+
+/// The slice of run supervision capabilities need.
+pub trait RunControl: Send + Sync {
+    fn interrupt(&self, id: &str) -> Result<aios_types::Run>;
+}
+
+/// Used where run control is not wired up — tests, and any surface that has no
+/// business stopping a run.
+pub struct NoRunControl;
+
+impl RunControl for NoRunControl {
+    fn interrupt(&self, _id: &str) -> Result<aios_types::Run> {
+        Err(Error::Invalid("run control is not available here".into()))
+    }
 }
 
 impl Context {
@@ -26,7 +45,18 @@ impl Context {
             config,
             registry,
             ports,
+            runs: Box::new(NoRunControl),
         }
+    }
+
+    /// Give this context real run control.
+    ///
+    /// Only the daemon does this. Everything else gets [`NoRunControl`], so a
+    /// surface that has no business stopping a run cannot accidentally acquire
+    /// the ability.
+    pub fn with_runs(mut self, runs: Box<dyn RunControl>) -> Self {
+        self.runs = runs;
+        self
     }
 
     /// Resolve a project reference to its working tree.

@@ -124,6 +124,15 @@ impl Vcs for NoVcs {
     fn log(&self, _r: &Path, _l: usize) -> Result<Vec<Commit>> {
         Err(Error::ToolMissing { tool: "git".into() })
     }
+    fn diff(
+        &self,
+        _r: &Path,
+        _base: Option<&str>,
+        _staged: bool,
+        _max: usize,
+    ) -> Result<aios_types::Diff> {
+        Err(Error::ToolMissing { tool: "git".into() })
+    }
 }
 
 fn context() -> Context {

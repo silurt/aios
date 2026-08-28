@@ -8,6 +8,7 @@
 pub mod error;
 pub mod routes;
 pub mod state;
+pub mod version;
 
 pub use state::{AppState, Shared};
 

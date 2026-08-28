@@ -34,4 +34,26 @@ pub fn register(items: &mut Vec<Capability>) {
         Effect::Write,
         |ctx: &Context, input: NewProject| -> Result<Project> { ctx.registry.add(input) },
     ));
+
+    items.push(Capability::new(
+        "projects.refresh",
+        "Re-run detection over a registered project",
+        Effect::Write,
+        |ctx: &Context, input: ProjectRef| -> Result<Project> {
+            let needle = input.project.unwrap_or_else(|| ".".to_string());
+            ctx.registry.refresh(&needle)
+        },
+    ));
+
+    items.push(Capability::new(
+        "projects.remove",
+        "Remove a project from the registry. Does not touch the directory",
+        Effect::Write,
+        |ctx: &Context, input: ProjectRef| -> Result<Project> {
+            let needle = input
+                .project
+                .ok_or_else(|| aios_core::Error::Invalid("`project` is required".into()))?;
+            ctx.registry.remove(&needle)
+        },
+    ));
 }

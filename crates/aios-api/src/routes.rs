@@ -29,9 +29,11 @@ pub fn router(state: Shared) -> Router {
         .route("/api/runs/{id}/events", get(run_events))
         .route("/api/runs/{id}/stream", get(stream_run))
         .route("/api/runs/{id}/resume", post(resume_run))
+        .route("/api/runs/{id}/interrupt", post(interrupt_run))
         .route("/api/approvals", get(list_approvals))
         .route("/api/approvals/{id}", get(get_approval))
         .route("/api/approvals/{id}/decide", post(decide_approval))
+        .layer(axum::middleware::from_fn(crate::version::negotiate))
         .with_state(state)
 }
 
@@ -242,6 +244,14 @@ async fn stream_run(
     };
 
     Sse::new(stream).keep_alive(axum::response::sse::KeepAlive::default())
+}
+
+/// Stop a running agent.
+async fn interrupt_run(
+    State(state): State<Shared>,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Run>> {
+    Ok(Json(state.supervisor.interrupt(&id)?))
 }
 
 async fn list_approvals(State(state): State<Shared>) -> ApiResult<Json<Vec<Approval>>> {

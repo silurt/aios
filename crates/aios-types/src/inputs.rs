@@ -156,3 +156,35 @@ pub struct ListProjectsInput {
     /// Only projects carrying this tag.
     pub tag: Option<String>,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct DiffInput {
+    /// Project slug, id, or path. Defaults to the current directory.
+    pub project: Option<String>,
+    /// Include staged changes as well as unstaged. Default true.
+    pub staged: bool,
+    /// Compare against this ref instead of the working tree, e.g. `HEAD~1`.
+    pub base: Option<String>,
+    /// Cap on returned patch size. A whole-repo diff can be megabytes, which
+    /// no UI wants and no model should be handed by accident.
+    pub max_bytes: usize,
+}
+
+impl Default for DiffInput {
+    fn default() -> Self {
+        Self {
+            project: None,
+            staged: true,
+            base: None,
+            max_bytes: 200_000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, ToSchema, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RunRef {
+    /// Run id.
+    pub run: String,
+}

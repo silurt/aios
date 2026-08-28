@@ -12,6 +12,14 @@ pub enum VcsCommand {
         #[arg(long, short)]
         project: Option<String>,
     },
+    /// Unified diff of what has changed
+    Diff {
+        #[arg(long, short)]
+        project: Option<String>,
+        /// Compare against a ref instead of the working tree
+        #[arg(long)]
+        base: Option<String>,
+    },
     /// Recent commits
     Log {
         #[arg(long, short)]
@@ -27,6 +35,9 @@ pub fn run(cmd: VcsCommand, json_out: bool) -> Result<()> {
         VcsCommand::Status { project } => ("vcs.status", json!({ "project": project })),
         VcsCommand::Log { project, limit } => {
             ("vcs.log", json!({ "project": project, "limit": limit }))
+        }
+        VcsCommand::Diff { project, base } => {
+            ("vcs.diff", json!({ "project": project, "base": base }))
         }
     };
     let result = client.call_capability(name, input)?;
@@ -63,6 +74,22 @@ pub fn run(cmd: VcsCommand, json_out: bool) -> Result<()> {
                     yellow(f["status"].as_str().unwrap_or("?")),
                     f["path"].as_str().unwrap_or("")
                 );
+            }
+        }
+        VcsCommand::Diff { .. } => {
+            let patch = result["patch"].as_str().unwrap_or("");
+            if patch.trim().is_empty() {
+                println!("{}", dim("no changes"));
+            } else {
+                println!("{}", patch);
+                if result["truncated"].as_bool().unwrap_or(false) {
+                    // Say so loudly: a truncated diff presented as the whole
+                    // change is how someone approves more than they reviewed.
+                    println!(
+                        "{}",
+                        yellow("diff was truncated — see `--json` for the cap")
+                    );
+                }
             }
         }
         VcsCommand::Log { .. } => {

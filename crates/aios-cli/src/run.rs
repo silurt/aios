@@ -38,6 +38,8 @@ pub enum RunCommand {
         #[arg(long)]
         stream: bool,
     },
+    /// Stop a running agent
+    Stop { run: String },
     /// Replay a run's transcript
     Events {
         run: String,
@@ -59,6 +61,7 @@ pub fn run(cmd: RunCommand, json: bool) -> Result<()> {
         RunCommand::List { limit } => list(limit, json),
         RunCommand::Show { run } => show(&run, json),
         RunCommand::Resume { run, task, stream } => resume(&run, task.as_deref(), stream, json),
+        RunCommand::Stop { run } => stop(&run, json),
         RunCommand::Events { run, since } => events(&run, since, json),
     }
 }
@@ -214,6 +217,23 @@ fn print_event(event: &aios_types::RunEvent) {
         }
         E::Failed { error } => println!("{} {error}", red("error")),
     }
+}
+
+fn stop(needle: &str, json: bool) -> Result<()> {
+    let run = client()?.post(
+        &format!("/api/runs/{needle}/interrupt"),
+        &serde_json::json!({}),
+    )?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&run)?);
+    } else {
+        println!(
+            "{} {}",
+            yellow("stopped"),
+            bold(run["id"].as_str().unwrap_or(""))
+        );
+    }
+    Ok(())
 }
 
 fn list(limit: usize, json: bool) -> Result<()> {

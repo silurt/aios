@@ -30,8 +30,8 @@ pub mod vcs;
 
 pub use ids::ProjectId;
 pub use inputs::{
-    CaptureNoteInput, CloseIssueInput, CreateIssueInput, GetIssueInput, ListIssuesInput,
-    ListProjectsInput, LogInput, ProjectRef, ReadNoteInput, ScopedInput, SearchNotesInput,
+    CaptureNoteInput, CloseIssueInput, CreateIssueInput, DiffInput, GetIssueInput, ListIssuesInput,
+    ListProjectsInput, LogInput, ProjectRef, ReadNoteInput, RunRef, ScopedInput, SearchNotesInput,
 };
 pub use issue::{Issue, IssueQuery, IssueStatus, NewIssue};
 pub use knowledge::{Note, NoteHit, NoteRef, Scope, WriteNote};
@@ -40,7 +40,7 @@ pub use run::{
     Approval, ApprovalId, ApprovalState, Decider, HarnessId, MessageRole, Run, RunEvent, RunId,
     RunStatus,
 };
-pub use vcs::{Commit, FileChange, RepoStatus};
+pub use vcs::{Commit, Diff, FileChange, RepoStatus};
 
 /// Wire-format timestamp. Always serialized as RFC 3339.
 pub type Timestamp = OffsetDateTime;

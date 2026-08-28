@@ -123,6 +123,7 @@ impl Supervisor {
             error: None,
             cost_usd: None,
             turns: None,
+            pid: None,
             started_at: OffsetDateTime::now_utc(),
             ended_at: None,
         };
@@ -239,6 +240,12 @@ impl Supervisor {
                 _ => Error::Io(e),
             })?;
 
+        // Record the pid before reading a single line. Interrupt has to work
+        // from another process — and from a later daemon lifetime — so the
+        // handle cannot live only in memory here.
+        run.pid = Some(child.id());
+        self.store.put(COLLECTION, run.id.as_str(), &run)?;
+
         let stdout = child.stdout.take().expect("stdout was piped");
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
@@ -294,15 +301,22 @@ impl Supervisor {
 
         run.exit_code = status.code();
         run.ended_at = Some(OffsetDateTime::now_utc());
+        // Clear it as soon as the process is gone: pids get reused, and a stale
+        // one is a signal aimed at whatever took its place.
+        run.pid = None;
         // A run parked mid-stream stays parked, and that check comes *first*.
         // A harness whose model gives up gracefully after a refused gate exits
         // 0, so keying off the exit status would report a parked run as a clean
         // success and hide the fact that it is one decision from continuing.
-        let parked = self
-            .get(run.id.as_str())
-            .is_ok_and(|r| r.status == RunStatus::Parked);
-        run.status = if parked {
-            RunStatus::Parked
+        // Whatever another process recorded while we were streaming wins over
+        // the exit status: a parked run and an interrupted one both exit
+        // non-zero, and calling either a failure loses why it stopped.
+        let recorded = self.get(run.id.as_str()).map(|r| r.status).ok();
+        run.status = if matches!(
+            recorded,
+            Some(RunStatus::Parked) | Some(RunStatus::Interrupted)
+        ) {
+            recorded.unwrap()
         } else if status.success() {
             RunStatus::Succeeded
         } else {
@@ -326,6 +340,51 @@ impl Supervisor {
 
         self.store.put(COLLECTION, run.id.as_str(), &run)?;
         Ok(run)
+    }
+
+    /// Stop a running harness.
+    ///
+    /// SIGTERM rather than SIGKILL, so the harness can flush and exit cleanly;
+    /// the transcript written so far is already durable either way. Sent via
+    /// `kill(1)` rather than linking libc, consistent with how everything else
+    /// here reaches the system.
+    ///
+    /// Refuses unless the run is actually running. A pid on a finished run has
+    /// almost certainly been reused by something unrelated, and signalling that
+    /// would be a genuinely dangerous bug.
+    pub fn interrupt(&self, id: &str) -> Result<Run> {
+        self.store.with_lock(|| {
+            let mut run = self.get(id)?;
+            if run.status != RunStatus::Running {
+                return Err(Error::Invalid(format!(
+                    "{} is {:?}, not running",
+                    run.id, run.status
+                )));
+            }
+            let pid = run.pid.ok_or_else(|| {
+                Error::Invalid(format!("{} has no recorded process to stop", run.id))
+            })?;
+
+            let killed = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if !killed {
+                return Err(Error::Invalid(format!(
+                    "could not signal process {pid}; it may have already exited"
+                )));
+            }
+
+            // The supervising thread will notice the exit and write the final
+            // state; this records the intent so the status is not misread as a
+            // crash in the meantime.
+            run.status = RunStatus::Interrupted;
+            run.ended_at = Some(OffsetDateTime::now_utc());
+            run.pid = None;
+            self.store.put(COLLECTION, run.id.as_str(), &run)?;
+            Ok(run)
+        })
     }
 
     /// Park a run at an unanswered gate.

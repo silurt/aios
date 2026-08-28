@@ -107,6 +107,7 @@ impl Capabilities {
         crate::caps::knowledge::register(&mut items);
         crate::caps::vcs::register(&mut items);
         crate::caps::projects::register(&mut items);
+        crate::caps::runs::register(&mut items);
         items.sort_by_key(|c| c.name);
         Self { items }
     }

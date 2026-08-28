@@ -8,7 +8,7 @@ use std::sync::Arc;
 pub struct AppState {
     pub capabilities: Capabilities,
     pub context: Context,
-    pub supervisor: Supervisor,
+    pub supervisor: Arc<Supervisor>,
     pub approvals: Approvals,
     pub policy: Policy,
 }
@@ -24,10 +24,12 @@ impl AppState {
     pub fn new(ports: Ports, policy: Policy) -> Result<Self> {
         let config = aios_core::Config::load()?;
         let registry = aios_core::Registry::open()?;
+        let supervisor = Arc::new(Supervisor::open(policy.clone())?);
         Ok(Self {
             capabilities: Capabilities::all(),
-            context: Context::new(config, registry, ports),
-            supervisor: Supervisor::open(policy.clone())?,
+            context: Context::new(config, registry, ports)
+                .with_runs(Box::new(aios_runs::SupervisorControl(supervisor.clone()))),
+            supervisor,
             approvals: Approvals::open()?,
             policy,
         })

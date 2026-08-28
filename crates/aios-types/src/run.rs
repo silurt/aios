@@ -89,6 +89,12 @@ pub struct Run {
     /// Highest event sequence written for this run — the cursor a client
     /// resumes from (§13.2).
     pub last_seq: u64,
+    /// OS process id of the harness, while it is running.
+    ///
+    /// Stored rather than held in memory so a run started by a previous daemon
+    /// lifetime can still be interrupted. Only trustworthy while `status` is
+    /// `Running` — pids are reused, so anything else must not signal it.
+    pub pid: Option<u32>,
     pub exit_code: Option<i32>,
     pub error: Option<String>,
     pub cost_usd: Option<f64>,

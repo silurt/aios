@@ -102,4 +102,17 @@ pub trait Vcs: Send + Sync {
     fn backend(&self) -> &'static str;
     fn status(&self, repo: &Path) -> Result<RepoStatus>;
     fn log(&self, repo: &Path, limit: usize) -> Result<Vec<Commit>>;
+
+    /// A unified diff, capped in size.
+    ///
+    /// The cap is part of the contract rather than a caller's problem: a
+    /// whole-repo diff can be megabytes, and handing that to a UI or a model
+    /// unannounced is worse than truncating and saying so.
+    fn diff(
+        &self,
+        repo: &Path,
+        base: Option<&str>,
+        staged: bool,
+        max_bytes: usize,
+    ) -> Result<aios_types::Diff>;
 }

@@ -6,7 +6,7 @@
 
 use aios_caps::ports::Vcs;
 use aios_core::{Error, Result};
-use aios_types::{Commit, FileChange, RepoStatus};
+use aios_types::{Commit, Diff, FileChange, RepoStatus};
 use std::path::Path;
 use std::process::Command;
 
@@ -138,5 +138,56 @@ impl Vcs for Git {
                 })
             })
             .collect())
+    }
+
+    fn diff(
+        &self,
+        repo: &Path,
+        base: Option<&str>,
+        staged: bool,
+        max_bytes: usize,
+    ) -> Result<Diff> {
+        let (against, range): (String, Vec<&str>) = match base {
+            Some(base) => (base.to_string(), vec![base]),
+            // No base: the working tree. `--staged` alone would *exclude*
+            // unstaged edits, which is the opposite of what someone reviewing
+            // "what did the agent change" wants, so HEAD is the comparison and
+            // staged decides whether the index is included.
+            None if staged => ("HEAD".to_string(), vec!["HEAD"]),
+            None => ("working tree".to_string(), Vec::new()),
+        };
+
+        let mut args = vec!["diff"];
+        args.extend(range.iter().copied());
+        let patch = self.run(repo, &args)?;
+
+        let mut name_args = vec!["diff", "--name-only"];
+        name_args.extend(range.iter().copied());
+        let files = self
+            .run(repo, &name_args)?
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(str::to_owned)
+            .collect();
+
+        let truncated = patch.len() > max_bytes;
+        let patch = if truncated {
+            // Cut on a char boundary; a patch sliced mid-codepoint would not be
+            // valid UTF-8 and would fail to serialize.
+            let mut end = max_bytes;
+            while end > 0 && !patch.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}\n… truncated", &patch[..end])
+        } else {
+            patch
+        };
+
+        Ok(Diff {
+            against,
+            patch,
+            files,
+            truncated,
+        })
     }
 }

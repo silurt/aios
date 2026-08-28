@@ -35,3 +35,19 @@ pub struct Commit {
     pub author: String,
     pub date: String,
 }
+
+/// A unified diff of the working tree.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Diff {
+    /// What was compared, e.g. `working tree` or `HEAD~1..HEAD`.
+    pub against: String,
+    /// Unified diff text. Empty when there is nothing to show.
+    pub patch: String,
+    /// Files touched, for rendering a summary without parsing the patch.
+    #[serde(default)]
+    pub files: Vec<String>,
+    /// True when the patch was cut short by `maxBytes`. A client must say so
+    /// rather than presenting a truncated diff as the whole change.
+    pub truncated: bool,
+}

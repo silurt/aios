@@ -9,4 +9,5 @@
 pub mod issues;
 pub mod knowledge;
 pub mod projects;
+pub mod runs;
 pub mod vcs;
